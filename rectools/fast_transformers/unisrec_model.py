@@ -1,12 +1,15 @@
-"""UniSRecModel: ModelBase wrapper with three-phase training."""
+"""UniSRecModel: ModelBase wrapper with configurable three-phase training."""
 
 import typing as tp
 
 import numpy as np
+import pandas as pd
 import torch
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import EarlyStopping
 from scipy import sparse
 
+from rectools import Columns
 from rectools.dataset import Dataset
 from rectools.models.base import InternalRecoTriplet, ModelBase, ModelConfig
 from rectools.models.nn.transformers.sasrec import SASRecDataPreparator
@@ -15,13 +18,14 @@ from rectools.types import InternalIdsArray
 from rectools.utils.config import BaseConfig
 
 from .unisrec_net import UniSRec
-from .unisrec_lightning import UniSRecLightning
+from .unisrec_lightning import UniSRecLightning, SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS
 from .ranking import rank_topk
 
 
 class UniSRecConfig(BaseConfig):
     """Hyperparameters for UniSRecModel (without pretrained embeddings)."""
 
+    # architecture
     n_factors: int = 256
     projection_hidden: int = 512
     n_blocks: int = 2
@@ -31,7 +35,10 @@ class UniSRecConfig(BaseConfig):
     adaptor_dropout: float = 0.2
     adaptor_type: str = "pca"
     use_adaptor_ffn: bool = True
+    ffn_type: str = "conv1d"
+    ffn_expansion: int = 1
 
+    # training phases
     phase1_epochs: int = 10
     phase2_epochs: int = 10
     phase3_epochs: int = 10
@@ -42,13 +49,27 @@ class UniSRecConfig(BaseConfig):
     lr_wp: float = 0.1
     lr_transformer: float = 3.0
 
+    # optimizer / scheduler
+    optimizer: str = "adamw"
+    scheduler: tp.Optional[str] = None
+    warmup_ratio: float = 0.05
+    min_lr_ratio: float = 0.1
     grad_clip: float = 1.0
     weight_decay: float = 0.01
+
+    # loss
+    loss: str = "softmax"
+    gbce_t: float = 0.2
+    n_negatives: tp.Optional[int] = None
+
+    # early stopping
+    patience: tp.Optional[int] = None
+
+    # data
     batch_size: int = 128
     recommend_batch_size: int = 256
     dataloader_num_workers: int = 0
     train_min_user_interactions: int = 2
-    n_negatives: tp.Optional[int] = None
 
 
 class UniSRecModelConfig(ModelConfig):
@@ -57,15 +78,20 @@ class UniSRecModelConfig(ModelConfig):
     model: UniSRecConfig = UniSRecConfig()
 
 
+def _leave_last_out_mask(interactions: pd.DataFrame, **kwargs: tp.Any) -> pd.Series:
+    """Default validation mask: last interaction per user."""
+    return interactions.groupby(Columns.User).cumcount(ascending=False) == 0
+
+
 class UniSRecModel(ModelBase[UniSRecModelConfig]):
     """
     UniSRec integrated into RecTools via ``ModelBase``.
 
     Three training phases
     ---------------------
-    1. **Phase 1** — SASRec on ID embeddings (``item_emb`` + transformer).
-    2. **Phase 2** — Adaptor only (transformer frozen, pretrained embeddings).
-    3. **Phase 3** — Full fine-tune (adaptor + transformer, pretrained embeddings).
+    1. **Phase 1** - SASRec on ID embeddings (``item_emb`` + transformer).
+    2. **Phase 2** - Adaptor only (transformer frozen, pretrained embeddings).
+    3. **Phase 3** - Full fine-tune (adaptor + transformer, pretrained embeddings).
 
     Parameters
     ----------
@@ -74,8 +100,9 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         ``(max_external_item_id + 1, n_variants, D_text)``.
         Index *i* holds the text embedding for the item whose **external** ID
         equals *i*.  Index 0 is padding (zeros).
-        During ``fit`` the tensor is reindexed to match the internal ID map
-        produced by ``SASRecDataPreparator``.
+    data_preparator : object, optional
+        Custom data preparator. Must implement the same interface as
+        ``SASRecDataPreparator``. If None, one is created automatically.
     """
 
     config_class = UniSRecModelConfig
@@ -85,6 +112,7 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
     def __init__(
         self,
         pretrained_item_embeddings: torch.Tensor,
+        # architecture
         n_factors: int = 256,
         projection_hidden: int = 512,
         n_blocks: int = 2,
@@ -94,6 +122,9 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         adaptor_dropout: float = 0.2,
         adaptor_type: str = "pca",
         use_adaptor_ffn: bool = True,
+        ffn_type: str = "conv1d",
+        ffn_expansion: int = 1,
+        # training phases
         phase1_epochs: int = 10,
         phase2_epochs: int = 10,
         phase3_epochs: int = 10,
@@ -103,16 +134,39 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         lr_head: float = 0.3,
         lr_wp: float = 0.1,
         lr_transformer: float = 3.0,
+        # optimizer / scheduler
+        optimizer: str = "adamw",
+        scheduler: tp.Optional[str] = None,
+        warmup_ratio: float = 0.05,
+        min_lr_ratio: float = 0.1,
         grad_clip: float = 1.0,
         weight_decay: float = 0.01,
+        # loss
+        loss: str = "softmax",
+        gbce_t: float = 0.2,
+        n_negatives: tp.Optional[int] = None,
+        # early stopping
+        patience: tp.Optional[int] = None,
+        # data
         batch_size: int = 128,
         recommend_batch_size: int = 256,
         dataloader_num_workers: int = 0,
         train_min_user_interactions: int = 2,
-        n_negatives: tp.Optional[int] = None,
+        # misc
+        data_preparator: tp.Any = None,
         verbose: int = 0,
     ) -> None:
         super().__init__(verbose=verbose)
+
+        if loss not in SUPPORTED_LOSSES:
+            raise ValueError(f"Unsupported loss '{loss}'. Choose from {SUPPORTED_LOSSES}")
+        if loss in ("BCE", "gBCE", "sampled_softmax") and n_negatives is None:
+            raise ValueError(f"Loss '{loss}' requires n_negatives to be set")
+        if optimizer not in SUPPORTED_OPTIMIZERS:
+            raise ValueError(f"Unsupported optimizer '{optimizer}'. Choose from {SUPPORTED_OPTIMIZERS}")
+        if scheduler not in SUPPORTED_SCHEDULERS:
+            raise ValueError(f"Unsupported scheduler '{scheduler}'. Choose from {SUPPORTED_SCHEDULERS}")
+
         self.pretrained_item_embeddings = pretrained_item_embeddings
         self.n_factors = n_factors
         self.projection_hidden = projection_hidden
@@ -123,6 +177,8 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         self.adaptor_dropout = adaptor_dropout
         self.adaptor_type = adaptor_type
         self.use_adaptor_ffn = use_adaptor_ffn
+        self.ffn_type = ffn_type
+        self.ffn_expansion = ffn_expansion
         self.phase1_epochs = phase1_epochs
         self.phase2_epochs = phase2_epochs
         self.phase3_epochs = phase3_epochs
@@ -132,18 +188,26 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         self.lr_head = lr_head
         self.lr_wp = lr_wp
         self.lr_transformer = lr_transformer
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.warmup_ratio = warmup_ratio
+        self.min_lr_ratio = min_lr_ratio
         self.grad_clip = grad_clip
         self.weight_decay = weight_decay
+        self.loss = loss
+        self.gbce_t = gbce_t
+        self.n_negatives = n_negatives
+        self.patience = patience
         self.batch_size = batch_size
         self.recommend_batch_size = recommend_batch_size
         self.dataloader_num_workers = dataloader_num_workers
         self.train_min_user_interactions = train_min_user_interactions
-        self.n_negatives = n_negatives
+        self._custom_data_preparator = data_preparator
 
         self._net: tp.Optional[UniSRec] = None
-        self._data_preparator: tp.Optional[SASRecDataPreparator] = None
+        self._data_preparator: tp.Optional[tp.Any] = None
 
-    # ── config boilerplate (embeddings are not serialised) ──
+    # ── config (embeddings + data_preparator not serialised) ──
 
     def _get_config(self) -> UniSRecModelConfig:
         return UniSRecModelConfig(
@@ -159,6 +223,8 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
                 adaptor_dropout=self.adaptor_dropout,
                 adaptor_type=self.adaptor_type,
                 use_adaptor_ffn=self.use_adaptor_ffn,
+                ffn_type=self.ffn_type,
+                ffn_expansion=self.ffn_expansion,
                 phase1_epochs=self.phase1_epochs,
                 phase2_epochs=self.phase2_epochs,
                 phase3_epochs=self.phase3_epochs,
@@ -168,28 +234,35 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
                 lr_head=self.lr_head,
                 lr_wp=self.lr_wp,
                 lr_transformer=self.lr_transformer,
+                optimizer=self.optimizer,
+                scheduler=self.scheduler,
+                warmup_ratio=self.warmup_ratio,
+                min_lr_ratio=self.min_lr_ratio,
                 grad_clip=self.grad_clip,
                 weight_decay=self.weight_decay,
+                loss=self.loss,
+                gbce_t=self.gbce_t,
+                n_negatives=self.n_negatives,
+                patience=self.patience,
                 batch_size=self.batch_size,
                 recommend_batch_size=self.recommend_batch_size,
                 dataloader_num_workers=self.dataloader_num_workers,
                 train_min_user_interactions=self.train_min_user_interactions,
-                n_negatives=self.n_negatives,
             ),
         )
 
     @classmethod
     def _from_config(cls, config: UniSRecModelConfig) -> "UniSRecModel":
         raise NotImplementedError(
-            "UniSRecModel cannot be restored from config alone — "
+            "UniSRecModel cannot be restored from config alone -- "
             "pretrained_item_embeddings must be supplied at construction time."
         )
 
     # ── helpers ──
 
-    def _align_embeddings(self, dp: SASRecDataPreparator) -> torch.Tensor:
-        """Reindex ``pretrained_item_embeddings`` to the preparator's internal IDs."""
-        ext_ids = dp.item_id_map.to_external.values  # array[internal_id] → external_id
+    def _align_embeddings(self, dp: tp.Any) -> torch.Tensor:
+        """Reindex pretrained_item_embeddings to the preparator's internal IDs."""
+        ext_ids = dp.item_id_map.to_external.values
         n_internal = dp.item_id_map.size
         n_extra = dp.n_item_extra_tokens
 
@@ -206,17 +279,43 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
 
         return aligned
 
-    def _make_trainer(self, max_epochs: int) -> pl.Trainer:
+    def _make_trainer(self, max_epochs: int, val_dl: tp.Any = None) -> pl.Trainer:
+        callbacks = []
+        if self.patience is not None and val_dl is not None:
+            callbacks.append(EarlyStopping(monitor="val_loss", patience=self.patience, mode="min"))
+
         return pl.Trainer(
             max_epochs=max_epochs,
             gradient_clip_val=self.grad_clip,
+            callbacks=callbacks or None,
             enable_checkpointing=False,
             enable_model_summary=False,
             logger=self.verbose > 0,
             enable_progress_bar=self.verbose > 0,
         )
 
+    def _make_lightning(
+        self, net: UniSRec, param_groups: tp.List[tp.Dict], use_id: bool, max_epochs: int, train_dl: tp.Any,
+    ) -> UniSRecLightning:
+        total_steps = len(train_dl) * max_epochs if self.scheduler else None
+        return UniSRecLightning(
+            net=net,
+            param_groups=param_groups,
+            use_id=use_id,
+            loss=self.loss,
+            n_negatives=self.n_negatives,
+            gbce_t=self.gbce_t,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            warmup_ratio=self.warmup_ratio,
+            min_lr_ratio=self.min_lr_ratio,
+            total_steps=total_steps,
+        )
+
     # ── Phase param-groups ──
+
+    def _phase1_params(self, net: UniSRec) -> tp.List[tp.Dict[str, tp.Any]]:
+        return [{"params": list(net.item_emb.parameters()) + net.transformer_params, "lr": self.phase1_lr}]
 
     def _phase2_params(self, net: UniSRec) -> tp.List[tp.Dict[str, tp.Any]]:
         if self.adaptor_type == "pca":
@@ -239,7 +338,6 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         return groups
 
     def _phase3_params(self, net: UniSRec) -> tp.List[tp.Dict[str, tp.Any]]:
-        # adaptor
         if self.adaptor_type == "pca":
             adaptor: tp.List[tp.Dict[str, tp.Any]] = [
                 {"params": [net.whitening_proj], "lr": self.phase3_lr * self.lr_wp, "weight_decay": 0.0},
@@ -250,11 +348,9 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
                 {"params": list(net.bn_input.parameters()), "lr": self.phase3_lr, "weight_decay": 0.0},
                 {"params": list(net.bn_score.parameters()), "lr": self.phase3_lr, "weight_decay": 0.0},
             ]
-        # head
         head: tp.List[tp.Dict[str, tp.Any]] = []
         if net.head is not None:
             head = [{"params": list(net.head.parameters()), "lr": self.phase3_lr * self.lr_head, "weight_decay": self.weight_decay}]
-        # transformer
         transformer = [
             {"params": list(net.pos_emb.parameters()), "lr": self.phase3_lr * self.lr_transformer, "weight_decay": 0.0},
             {
@@ -281,20 +377,25 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
 
     def _fit(self, dataset: Dataset, *args: tp.Any, **kwargs: tp.Any) -> None:
         # Data preparation
-        negative_sampler = None
-        n_negatives_dp: tp.Optional[int] = None
-        if self.n_negatives is not None:
-            negative_sampler = CatalogUniformSampler(n_negatives=self.n_negatives)
-            n_negatives_dp = self.n_negatives
+        if self._custom_data_preparator is not None:
+            dp = self._custom_data_preparator
+        else:
+            requires_neg = self.loss in ("BCE", "gBCE", "sampled_softmax") or self.n_negatives is not None
+            negative_sampler = CatalogUniformSampler(n_negatives=self.n_negatives) if requires_neg else None
+            n_negatives_dp = self.n_negatives if requires_neg else None
 
-        dp = SASRecDataPreparator(
-            session_max_len=self.session_max_len,
-            batch_size=self.batch_size,
-            dataloader_num_workers=self.dataloader_num_workers,
-            train_min_user_interactions=self.train_min_user_interactions,
-            n_negatives=n_negatives_dp,
-            negative_sampler=negative_sampler,
-        )
+            dp_kwargs: tp.Dict[str, tp.Any] = dict(
+                session_max_len=self.session_max_len,
+                batch_size=self.batch_size,
+                dataloader_num_workers=self.dataloader_num_workers,
+                train_min_user_interactions=self.train_min_user_interactions,
+                n_negatives=n_negatives_dp,
+                negative_sampler=negative_sampler,
+            )
+            if self.patience is not None:
+                dp_kwargs["get_val_mask_func"] = _leave_last_out_mask
+            dp = SASRecDataPreparator(**dp_kwargs)
+
         dp.process_dataset_train(dataset)
         self._data_preparator = dp
 
@@ -313,27 +414,31 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
             adaptor_dropout=self.adaptor_dropout,
             adaptor_type=self.adaptor_type,
             use_adaptor_ffn=self.use_adaptor_ffn,
+            ffn_type=self.ffn_type,
+            ffn_expansion=self.ffn_expansion,
         )
 
         train_dl = dp.get_dataloader_train()
+        val_dl = dp.get_dataloader_val() if self.patience is not None else None
 
-        # ── Phase 1: ID embeddings ──
+        def _run_phase(param_groups: tp.List[tp.Dict], use_id: bool, max_epochs: int) -> None:
+            lm = self._make_lightning(net, param_groups, use_id, max_epochs, train_dl)
+            trainer = self._make_trainer(max_epochs, val_dl)
+            trainer.fit(lm, train_dl, val_dl)
+
+        # Phase 1: ID embeddings
         if self.phase1_epochs > 0:
-            p1_params = [{"params": list(net.item_emb.parameters()) + net.transformer_params, "lr": self.phase1_lr}]
-            lm = UniSRecLightning(net, p1_params, use_id=True)
-            self._make_trainer(self.phase1_epochs).fit(lm, train_dl)
+            _run_phase(self._phase1_params(net), use_id=True, max_epochs=self.phase1_epochs)
 
-        # ── Phase 2: adaptor only (transformer frozen) ──
+        # Phase 2: adaptor only (transformer frozen)
         if self.phase2_epochs > 0 and self.use_adaptor_ffn:
             net.freeze_transformer()
-            lm = UniSRecLightning(net, self._phase2_params(net), use_id=False)
-            self._make_trainer(self.phase2_epochs).fit(lm, train_dl)
+            _run_phase(self._phase2_params(net), use_id=False, max_epochs=self.phase2_epochs)
 
-        # ── Phase 3: full fine-tune ──
+        # Phase 3: full fine-tune
         if self.phase3_epochs > 0:
             net.unfreeze_transformer()
-            lm = UniSRecLightning(net, self._phase3_params(net), use_id=False)
-            self._make_trainer(self.phase3_epochs).fit(lm, train_dl)
+            _run_phase(self._phase3_params(net), use_id=False, max_epochs=self.phase3_epochs)
 
         self._net = net
 
@@ -344,7 +449,7 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         dataset: Dataset,
         users: tp.Any,
         on_unsupported_targets: tp.Any,
-        context: tp.Optional["pd.DataFrame"] = None,
+        context: tp.Optional[pd.DataFrame] = None,
     ) -> Dataset:
         assert self._data_preparator is not None
         return self._data_preparator.transform_dataset_u2i(dataset, users)
@@ -373,8 +478,8 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
     def _get_item_embeddings(self) -> torch.Tensor:
         assert self._net is not None
         self._net.eval()
-        all_emb = self._net.project_all()  # (n_items+1, D)
-        return all_emb[1:]                  # skip padding → (n_items, D)
+        all_emb = self._net.project_all()
+        return all_emb[1:]
 
     # ── recommend ──
 
@@ -392,7 +497,6 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         user_embs = self._get_user_embeddings(dataset)
         item_embs = self._get_item_embeddings()
 
-        # viewed-item filter
         filter_csr = None
         if filter_viewed:
             ui_mat = dataset.get_user_item_matrix(include_weights=False)
@@ -409,7 +513,6 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
             else:
                 filter_csr = sliced
 
-        # whitelist
         whitelist = None
         if sorted_item_ids_to_recommend is not None:
             n_extra = self._data_preparator.n_item_extra_tokens
@@ -418,9 +521,7 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
 
         u_ids, i_ids, scores = rank_topk(
             user_embs, item_embs, k,
-            filter_csr=filter_csr,
-            whitelist=whitelist,
-            batch_size=self.recommend_batch_size,
+            filter_csr=filter_csr, whitelist=whitelist, batch_size=self.recommend_batch_size,
         )
 
         n_extra = self._data_preparator.n_item_extra_tokens
@@ -449,8 +550,7 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
 
         t_ids, i_ids, scores = rank_topk(
             target_embs, item_embs, k,
-            whitelist=whitelist,
-            batch_size=self.recommend_batch_size,
+            whitelist=whitelist, batch_size=self.recommend_batch_size,
         )
 
         result_target_ids = target_ids[t_ids]

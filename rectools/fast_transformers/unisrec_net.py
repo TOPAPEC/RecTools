@@ -15,7 +15,7 @@ def _make_mlp(in_dim: int, hidden_dim: int, out_dim: int, dropout: float) -> nn.
     )
 
 
-class FeedForward(nn.Module):
+class FeedForwardConv1d(nn.Module):
     """Point-wise FFN via Conv1d (kernel_size=1), matching the reference UniSRec."""
 
     def __init__(self, hidden_units: int, dropout_rate: float) -> None:
@@ -32,6 +32,34 @@ class FeedForward(nn.Module):
         outputs = self.conv2(outputs)
         outputs = self.dropout2(outputs)
         return outputs.transpose(-1, -2)
+
+
+# keep old name as alias
+FeedForward = FeedForwardConv1d
+
+
+def make_ffn(n_factors: int, ffn_type: str, expansion: int, dropout: float) -> nn.Module:
+    """Create a feed-forward block.
+
+    Parameters
+    ----------
+    ffn_type : ``"conv1d"`` | ``"linear_gelu"`` | ``"linear_relu"``
+    expansion : hidden-dim multiplier (e.g. 1 or 4).
+    """
+    if ffn_type == "conv1d":
+        return FeedForwardConv1d(n_factors, dropout)
+    hidden = n_factors * expansion
+    if ffn_type == "linear_gelu":
+        return nn.Sequential(
+            nn.Linear(n_factors, hidden), nn.GELU(), nn.Dropout(dropout),
+            nn.Linear(hidden, n_factors), nn.Dropout(dropout),
+        )
+    if ffn_type == "linear_relu":
+        return nn.Sequential(
+            nn.Linear(n_factors, hidden), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(hidden, n_factors),
+        )
+    raise ValueError(f"Unknown ffn_type: {ffn_type}. Choose from: conv1d, linear_gelu, linear_relu")
 
 
 class UniSRec(nn.Module):
@@ -87,6 +115,8 @@ class UniSRec(nn.Module):
         adaptor_type: str = "pca",
         use_adaptor_ffn: bool = True,
         initializer_range: float = 0.02,
+        ffn_type: str = "conv1d",
+        ffn_expansion: int = 1,
     ) -> None:
         super().__init__()
         self.n_items = n_items
@@ -144,7 +174,7 @@ class UniSRec(nn.Module):
             self.attention_layernorms.append(nn.LayerNorm(n_factors, eps=1e-12))
             self.attention_layers.append(nn.MultiheadAttention(n_factors, n_heads, dropout, batch_first=True))
             self.forward_layernorms.append(nn.LayerNorm(n_factors, eps=1e-12))
-            self.forward_layers.append(FeedForward(n_factors, dropout))
+            self.forward_layers.append(make_ffn(n_factors, ffn_type, ffn_expansion, dropout))
 
         self.apply(self._init_weights)
 

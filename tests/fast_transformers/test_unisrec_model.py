@@ -124,12 +124,84 @@ class TestWithNegatives:
         assert len(reco) > 0
 
 
+class TestFFNTypes:
+    @pytest.mark.parametrize("ffn_type", ["conv1d", "linear_gelu", "linear_relu"])
+    def test_ffn_type(self, ffn_type: str) -> None:
+        ds = _make_dataset()
+        model = _make_model(ffn_type=ffn_type, ffn_expansion=2, phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model.fit(ds)
+        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
+        assert len(reco) > 0
+
+
+class TestLosses:
+    def test_bce_loss(self) -> None:
+        ds = _make_dataset()
+        model = _make_model(loss="BCE", n_negatives=4)
+        model.fit(ds)
+        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
+        assert len(reco) > 0
+
+    def test_gbce_loss(self) -> None:
+        ds = _make_dataset()
+        model = _make_model(loss="gBCE", n_negatives=4, gbce_t=0.2)
+        model.fit(ds)
+        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
+        assert len(reco) > 0
+
+    def test_sampled_softmax_loss(self) -> None:
+        ds = _make_dataset()
+        model = _make_model(loss="sampled_softmax", n_negatives=4)
+        model.fit(ds)
+        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
+        assert len(reco) > 0
+
+    def test_invalid_loss(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported loss"):
+            _make_model(loss="invalid")
+
+
+class TestOptimizer:
+    def test_adam_optimizer(self) -> None:
+        ds = _make_dataset()
+        model = _make_model(optimizer="adam", phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model.fit(ds)
+        reco = model.recommend(users=[0], dataset=ds, k=3, filter_viewed=False)
+        assert len(reco) > 0
+
+    def test_invalid_optimizer(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported optimizer"):
+            _make_model(optimizer="sgd")
+
+
+class TestScheduler:
+    def test_cosine_warmup(self) -> None:
+        ds = _make_dataset()
+        model = _make_model(scheduler="cosine_warmup", warmup_ratio=0.1, phase1_epochs=0, phase2_epochs=0, phase3_epochs=2)
+        model.fit(ds)
+        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
+        assert len(reco) > 0
+
+
+class TestEarlyStopping:
+    def test_patience(self) -> None:
+        ds = _make_dataset()
+        model = _make_model(patience=2, phase1_epochs=0, phase2_epochs=0, phase3_epochs=5)
+        model.fit(ds)
+        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
+        assert len(reco) > 0
+
+
 class TestConfig:
     def test_get_config(self) -> None:
-        model = _make_model()
+        model = _make_model(ffn_type="linear_gelu", loss="BCE", n_negatives=4, optimizer="adam", scheduler="cosine_warmup", patience=5)
         config = model.get_config(mode="pydantic")
         assert config.model.n_factors == 16
-        assert config.model.n_blocks == 1
+        assert config.model.ffn_type == "linear_gelu"
+        assert config.model.loss == "BCE"
+        assert config.model.optimizer == "adam"
+        assert config.model.scheduler == "cosine_warmup"
+        assert config.model.patience == 5
 
     def test_from_config_raises(self) -> None:
         model = _make_model()
