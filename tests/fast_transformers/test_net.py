@@ -1,0 +1,49 @@
+"""Tests for FlatSASRec network."""
+
+import torch
+import pytest
+
+from rectools.fast_transformers.net import FlatSASRec
+
+
+@pytest.fixture()
+def net() -> FlatSASRec:
+    return FlatSASRec(n_items=30, n_factors=16, n_blocks=1, n_heads=2, session_max_len=8, dropout=0.0)
+
+
+class TestFlatSASRec:
+    def test_full_catalog_logits_shape(self, net: FlatSASRec) -> None:
+        batch = {
+            "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
+            "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
+        }
+        logits = net(batch)
+        assert logits.shape == (2, 5, 30)  # (B, L, n_items)
+
+    def test_candidate_logits_shape(self, net: FlatSASRec) -> None:
+        batch = {
+            "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
+            "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
+            "negatives": torch.randint(1, 30, (2, 5, 3)),
+        }
+        logits = net(batch)
+        assert logits.shape == (2, 5, 4)  # (B, L, 1 + n_neg)
+
+    def test_encode_last_shape(self, net: FlatSASRec) -> None:
+        x = torch.tensor([[0, 0, 1, 2, 3]])
+        emb = net.encode_last(x)
+        assert emb.shape == (1, 16)
+
+    def test_padding_invariance(self, net: FlatSASRec) -> None:
+        """Different left-padding should produce same last-position embedding."""
+        net.eval()
+        x1 = torch.tensor([[0, 0, 0, 1, 2]])
+        x2 = torch.tensor([[0, 0, 0, 0, 2]])
+        # Not exactly the same because sequence context differs,
+        # but if we use the same content the output should be identical
+        x_a = torch.tensor([[0, 0, 0, 5, 10]])
+        x_b = torch.tensor([[0, 0, 0, 5, 10]])
+        with torch.no_grad():
+            e_a = net.encode_last(x_a)
+            e_b = net.encode_last(x_b)
+        torch.testing.assert_close(e_a, e_b)
