@@ -3,9 +3,9 @@
 import math
 import typing as tp
 
+import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
 
 from .unisrec_net import UniSRec
@@ -63,7 +63,10 @@ class UniSRecLightning(pl.LightningModule):
         return self.net.project_all()
 
     def _get_pos_neg_logits(
-        self, hidden: torch.Tensor, labels: torch.Tensor, negatives: torch.Tensor,
+        self,
+        hidden: torch.Tensor,
+        labels: torch.Tensor,
+        negatives: torch.Tensor,
     ) -> torch.Tensor:
         """Compute (B, L, 1+N) logits where index 0 = positive."""
         emb_pos = self._get_item_embs(labels)
@@ -71,7 +74,8 @@ class UniSRecLightning(pl.LightningModule):
 
         emb_neg = self._get_item_embs(negatives)
         logits_neg = torch.matmul(
-            hidden.unsqueeze(2), emb_neg.transpose(2, 3),
+            hidden.unsqueeze(2),
+            emb_neg.transpose(2, 3),
         ).squeeze(2)
 
         return torch.cat([logits_pos.unsqueeze(-1), logits_neg], dim=-1)
@@ -79,7 +83,9 @@ class UniSRecLightning(pl.LightningModule):
     # ── losses ──
 
     def _calc_loss(
-        self, hidden: torch.Tensor, batch: tp.Dict[str, torch.Tensor],
+        self,
+        hidden: torch.Tensor,
+        batch: tp.Dict[str, torch.Tensor],
     ) -> torch.Tensor:
         labels = batch["y"]
         has_neg = "negatives" in batch
@@ -114,7 +120,9 @@ class UniSRecLightning(pl.LightningModule):
         targets = labels.clone()
         targets[targets == 0] = -100
         return F.cross_entropy(
-            logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100,
+            logits.view(-1, logits.size(-1)),
+            targets.view(-1),
+            ignore_index=-100,
         )
 
     def _sampled_softmax_loss(self, logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -123,7 +131,9 @@ class UniSRecLightning(pl.LightningModule):
         logits[:, :, [0, 1]] = logits[:, :, [1, 0]]
         targets = mask.long()  # 1 where non-padding, 0 where padding
         return F.cross_entropy(
-            logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0,
+            logits.view(-1, logits.size(-1)),
+            targets.view(-1),
+            ignore_index=0,
         )
 
     def _bce_loss(self, logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:

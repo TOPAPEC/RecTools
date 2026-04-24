@@ -127,19 +127,7 @@ class FlatSASRec(nn.Module):
         Tensor (B, D)
         """
         h = self.encode(x)  # (B, L, D)
-        # Find last non-padding position per row
-        non_pad = (x != self.PADDING_IDX)  # (B, L)
-        # lengths: number of non-pad tokens
-        lengths = non_pad.sum(dim=1)  # (B,)
-        # Clamp to at least 1 to avoid index -1 for fully-padded rows
-        last_idx = (lengths - 1).clamp(min=0)
-        # We use left-padding, so last non-pad is at position (L - 1) if any token exists
-        # Actually with left padding, non-pad tokens are at the end, so the last position is L-1
-        # But let's compute correctly: the last non-pad index
-        # With left-padding: first non-pad is at L - length, last non-pad is at L - 1
-        B = x.shape[0]
-        last_pos = x.shape[1] - 1  # last position is always the last for left-padded sequences
-        return h[:, last_pos, :]  # (B, D)
+        return h[:, -1, :]  # left-padded: last position is always rightmost
 
     def all_item_embeddings(self) -> torch.Tensor:
         """

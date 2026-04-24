@@ -82,9 +82,9 @@ class TestRankTopk:
         for uid in range(user_embs.shape[0]):
             mask = user_ids == uid
             user_scores = scores[mask]
-            assert np.all(user_scores[:-1] >= user_scores[1:]), (
-                f"Scores for user {uid} are not in descending order: {user_scores}"
-            )
+            assert np.all(
+                user_scores[:-1] >= user_scores[1:]
+            ), f"Scores for user {uid} are not in descending order: {user_scores}"
 
     def test_filter_csr_excludes_viewed_items(self):
         """Items present in filter_csr are excluded from recommendations."""
@@ -153,9 +153,7 @@ class TestRankTopk:
             shape=(3, 5),
         )
 
-        user_ids, item_ids, scores = rank_topk(
-            user_embs, item_embs, k, filter_csr=filter_csr, whitelist=whitelist
-        )
+        user_ids, item_ids, scores = rank_topk(user_embs, item_embs, k, filter_csr=filter_csr, whitelist=whitelist)
 
         # user0 whitelist scores: item0(2), item1(5), item3(4)
         # After filter (item1 excluded): item0(2), item3(4)

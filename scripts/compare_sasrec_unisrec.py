@@ -17,9 +17,9 @@ from tqdm import tqdm
 
 from rectools import Columns
 from rectools.dataset import Dataset
-from rectools.models import SASRecModel
 from rectools.fast_transformers import UniSRecModel
 from rectools.fast_transformers.gpu_data import build_sequences
+from rectools.models import SASRecModel
 
 DATA_DIR = Path("data/ml-20m")
 CACHE_EMB_PATH = DATA_DIR / "qwen_embeddings.pt"
@@ -94,7 +94,7 @@ def evaluate_unisrec(model, train_df, test_df, k=10, batch_size=256, use_id=Fals
 
     hits, ndcg_sum, mrr_sum, total = 0, 0.0, 0.0, 0
     for start in tqdm(range(0, len(test_users), batch_size), desc="Eval UniSRec"):
-        batch_users = test_users[start:start + batch_size]
+        batch_users = test_users[start : start + batch_size]
         seqs, targets = [], []
         for uid in batch_users:
             history = train_grouped.get(uid, [])
@@ -151,44 +151,48 @@ def cleanup():
 
 def write_report(timings: dict, metrics: dict, data_info: dict):
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A"
+    date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    dataset_str = (
+        f"ML-20M (min_rating={MIN_RATING}," f" min_item={MIN_ITEM_INTERACTIONS}," f" min_user={MIN_USER_INTERACTIONS})"
+    )
     lines = [
-        f"# SASRec vs UniSRec-ID Comparison",
-        f"",
-        f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  ",
+        "# SASRec vs UniSRec-ID Comparison",
+        "",
+        f"**Date:** {date_str}  ",
         f"**GPU:** {gpu_name}  ",
-        f"**Dataset:** ML-20M (min_rating={MIN_RATING}, min_item={MIN_ITEM_INTERACTIONS}, min_user={MIN_USER_INTERACTIONS})",
-        f"",
-        f"## Data",
-        f"",
-        f"| | Count |",
-        f"|---|---:|",
+        f"**Dataset:** {dataset_str}",
+        "",
+        "## Data",
+        "",
+        "| | Count |",
+        "|---|---:|",
         f"| Interactions | {data_info['n_interactions']:,} |",
         f"| Users | {data_info['n_users']:,} |",
         f"| Items | {data_info['n_items']:,} |",
         f"| Train | {data_info['n_train']:,} |",
         f"| Val | {data_info['n_val']:,} |",
         f"| Test | {data_info['n_test']:,} |",
-        f"",
-        f"## Config",
-        f"",
-        f"| Parameter | Value |",
-        f"|---|---|",
+        "",
+        "## Config",
+        "",
+        "| Parameter | Value |",
+        "|---|---|",
         f"| n_factors | {N_FACTORS} |",
         f"| n_blocks | {N_BLOCKS} |",
         f"| n_heads | {N_HEADS} |",
         f"| session_max_len | {SESSION_MAX_LEN} |",
         f"| batch_size | {BATCH_SIZE} |",
         f"| lr | {LR} |",
-        f"| loss | softmax |",
-        f"| optimizer | Adam |",
+        "| loss | softmax |",
+        "| optimizer | Adam |",
         f"| epochs | {EPOCHS} |",
         f"| patience | {PATIENCE} |",
-        f"| dropout | 0.1 |",
-        f"",
-        f"## Timing",
-        f"",
-        f"| Stage | SASRec | UniSRec ID |",
-        f"|---|---:|---:|",
+        "| dropout | 0.1 |",
+        "",
+        "## Timing",
+        "",
+        "| Stage | SASRec | UniSRec ID |",
+        "|---|---:|---:|",
     ]
 
     for stage in ["data_load", "preprocessing", "model_init", "training", "eval"]:
@@ -209,32 +213,42 @@ def write_report(timings: dict, metrics: dict, data_info: dict):
 
     s_epoch = timings.get("sasrec_training", 0) / max(timings.get("sasrec_epochs_done", 1), 1)
     u_epoch = timings.get("unisrec_training", 0) / max(timings.get("unisrec_epochs_done", 1), 1)
-    lines.extend([
-        f"",
-        f"| | SASRec | UniSRec ID |",
-        f"|---|---:|---:|",
-        f"| Epochs completed | {timings.get('sasrec_epochs_done', EPOCHS)} | {timings.get('unisrec_epochs_done', EPOCHS)} |",
-        f"| Time per epoch | {s_epoch:.1f}s | {u_epoch:.1f}s |",
-        f"| Preprocessing speedup | — | {timings.get('prep_speedup', 0):.0f}x |",
-    ])
+    s_epochs_done = timings.get("sasrec_epochs_done", EPOCHS)
+    u_epochs_done = timings.get("unisrec_epochs_done", EPOCHS)
+    prep_speedup = timings.get("prep_speedup", 0)
+    lines.extend(
+        [
+            "",
+            "| | SASRec | UniSRec ID |",
+            "|---|---:|---:|",
+            f"| Epochs completed | {s_epochs_done} | {u_epochs_done} |",
+            f"| Time per epoch | {s_epoch:.1f}s | {u_epoch:.1f}s |",
+            f"| Preprocessing speedup | — | {prep_speedup:.0f}x |",
+        ]
+    )
 
-    lines.extend([
-        f"",
-        f"## Quality (test set, {metrics['sasrec']['n_users']:,} users)",
-        f"",
-        f"| Model | HR@10 | NDCG@10 | MRR@10 |",
-        f"|---|---:|---:|---:|",
-    ])
+    n_test_users = metrics["sasrec"]["n_users"]
+    lines.extend(
+        [
+            "",
+            f"## Quality (test set, {n_test_users:,} users)",
+            "",
+            "| Model | HR@10 | NDCG@10 | MRR@10 |",
+            "|---|---:|---:|---:|",
+        ]
+    )
     for name, key in [("SASRec", "sasrec"), ("UniSRec ID", "unisrec")]:
         m = metrics[key]
         lines.append(f"| {name} | {m['HR@10']:.4f} | {m['NDCG@10']:.4f} | {m['MRR@10']:.4f} |")
 
     hr_diff = (metrics["unisrec"]["HR@10"] / metrics["sasrec"]["HR@10"] - 1) * 100
     ndcg_diff = (metrics["unisrec"]["NDCG@10"] / metrics["sasrec"]["NDCG@10"] - 1) * 100
-    lines.extend([
-        f"",
-        f"UniSRec vs SASRec: HR@10 {hr_diff:+.1f}%, NDCG@10 {ndcg_diff:+.1f}%",
-    ])
+    lines.extend(
+        [
+            "",
+            f"UniSRec vs SASRec: HR@10 {hr_diff:+.1f}%, NDCG@10 {ndcg_diff:+.1f}%",
+        ]
+    )
 
     report = "\n".join(lines) + "\n"
     REPORT_PATH.write_text(report)
@@ -264,7 +278,10 @@ def main():
         "n_val": len(val_ratings),
         "n_test": len(test_ratings),
     }
-    print(f"Data: {data_info['n_interactions']:,} interactions, {data_info['n_users']:,} users, {data_info['n_items']:,} items")
+    n_int = data_info["n_interactions"]
+    n_usr = data_info["n_users"]
+    n_itm = data_info["n_items"]
+    print(f"Data: {n_int:,} interactions, {n_usr:,} users, {n_itm:,} items")
     print(f"Split: train={data_info['n_train']:,}, val={data_info['n_val']:,}, test={data_info['n_test']:,}")
 
     user_ids_t, item_ids_t, timestamps_t = to_tensors(train_with_val)
@@ -273,18 +290,20 @@ def main():
     # ══════════════════════════════════════════════════════════════
     # 1. SASRec (RecTools)
     # ══════════════════════════════════════════════════════════════
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"1. SASRec (RecTools) — {EPOCHS} epochs")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     # Preprocessing
     t0 = time.time()
-    df_rectools = pd.DataFrame({
-        Columns.User: train_with_val["user_id"].values,
-        Columns.Item: train_with_val["item_id"].values,
-        Columns.Weight: 1.0,
-        Columns.Datetime: pd.to_datetime(train_with_val["timestamp"], unit="s"),
-    })
+    df_rectools = pd.DataFrame(
+        {
+            Columns.User: train_with_val["user_id"].values,
+            Columns.Item: train_with_val["item_id"].values,
+            Columns.Weight: 1.0,
+            Columns.Datetime: pd.to_datetime(train_with_val["timestamp"], unit="s"),
+        }
+    )
     dataset = Dataset.construct(df_rectools)
     timings["sasrec_preprocessing"] = time.time() - t0
     print(f"  Preprocessing (Dataset.construct): {timings['sasrec_preprocessing']:.2f}s")
@@ -292,9 +311,11 @@ def main():
     # Model init + training
     def sasrec_trainer(**kwargs):
         import pytorch_lightning as pl
+
         callbacks = []
         if PATIENCE is not None:
             from pytorch_lightning.callbacks import EarlyStopping
+
             callbacks.append(EarlyStopping(monitor="val_loss", patience=PATIENCE, mode="min"))
         return pl.Trainer(
             max_epochs=EPOCHS,
@@ -323,11 +344,13 @@ def main():
         get_trainer_func=sasrec_trainer,
     )
     if PATIENCE is not None:
+
         def sasrec_val_mask(interactions_df, **kwargs):
             idx = interactions_df.groupby(Columns.User).tail(1).index
             mask = pd.Series(False, index=interactions_df.index)
             mask.loc[idx] = True
             return mask
+
         sasrec_kwargs["get_val_mask_func"] = sasrec_val_mask
 
     t0 = time.time()
@@ -346,15 +369,19 @@ def main():
     sasrec_metrics = evaluate_sasrec(sasrec, dataset, test_ratings)
     timings["sasrec_eval"] = time.time() - t0
     print(f"  Eval: {timings['sasrec_eval']:.1f}s")
-    print(f"  HR@10={sasrec_metrics['HR@10']:.4f}  NDCG@10={sasrec_metrics['NDCG@10']:.4f}  MRR@10={sasrec_metrics['MRR@10']:.4f}")
-    del sasrec; cleanup()
+    hr = sasrec_metrics["HR@10"]
+    ndcg = sasrec_metrics["NDCG@10"]
+    mrr = sasrec_metrics["MRR@10"]
+    print(f"  HR@10={hr:.4f}  NDCG@10={ndcg:.4f}  MRR@10={mrr:.4f}")
+    del sasrec
+    cleanup()
 
     # ══════════════════════════════════════════════════════════════
     # 2. UniSRec ID
     # ══════════════════════════════════════════════════════════════
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"2. UniSRec ID — {EPOCHS} epochs")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     # Preprocessing
     torch.cuda.synchronize()
@@ -408,8 +435,12 @@ def main():
     unisrec_metrics = evaluate_unisrec(unisrec_id, train_with_val, test_ratings, use_id=True)
     timings["unisrec_eval"] = time.time() - t0
     print(f"  Eval: {timings['unisrec_eval']:.1f}s")
-    print(f"  HR@10={unisrec_metrics['HR@10']:.4f}  NDCG@10={unisrec_metrics['NDCG@10']:.4f}  MRR@10={unisrec_metrics['MRR@10']:.4f}")
-    del unisrec_id; cleanup()
+    hr = unisrec_metrics["HR@10"]
+    ndcg = unisrec_metrics["NDCG@10"]
+    mrr = unisrec_metrics["MRR@10"]
+    print(f"  HR@10={hr:.4f}  NDCG@10={ndcg:.4f}  MRR@10={mrr:.4f}")
+    del unisrec_id
+    cleanup()
 
     # ── Report ──
     metrics = {"sasrec": sasrec_metrics, "unisrec": unisrec_metrics}

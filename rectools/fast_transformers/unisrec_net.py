@@ -51,12 +51,17 @@ def make_ffn(n_factors: int, ffn_type: str, expansion: int, dropout: float) -> n
     hidden = n_factors * expansion
     if ffn_type == "linear_gelu":
         return nn.Sequential(
-            nn.Linear(n_factors, hidden), nn.GELU(), nn.Dropout(dropout),
-            nn.Linear(hidden, n_factors), nn.Dropout(dropout),
+            nn.Linear(n_factors, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, n_factors),
+            nn.Dropout(dropout),
         )
     if ffn_type == "linear_relu":
         return nn.Sequential(
-            nn.Linear(n_factors, hidden), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(n_factors, hidden),
+            nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden, n_factors),
         )
     raise ValueError(f"Unknown ffn_type: {ffn_type}. Choose from: conv1d, linear_gelu, linear_relu")
@@ -238,8 +243,10 @@ class UniSRec(nn.Module):
     @property
     def transformer_params(self) -> tp.List[nn.Parameter]:
         modules = (
-            list(self.attention_layernorms) + list(self.attention_layers)
-            + list(self.forward_layernorms) + list(self.forward_layers)
+            list(self.attention_layernorms)
+            + list(self.attention_layers)
+            + list(self.forward_layernorms)
+            + list(self.forward_layers)
             + [self.last_layernorm, self.pos_emb]
         )
         return [p for m in modules for p in m.parameters()]
@@ -272,9 +279,9 @@ class UniSRec(nn.Module):
         seqs = seqs + self.pos_emb(positions)
         seqs = self.emb_dropout(seqs)
 
-        pad_mask = (input_ids == self.PADDING_IDX)               # (B, L)
-        pad_mask_3d = pad_mask.unsqueeze(-1)                       # (B, L, 1)
-        seqs = seqs.masked_fill(pad_mask_3d, 0.0)                 # zero out padding
+        pad_mask = input_ids == self.PADDING_IDX  # (B, L)
+        pad_mask_3d = pad_mask.unsqueeze(-1)  # (B, L, 1)
+        seqs = seqs.masked_fill(pad_mask_3d, 0.0)  # zero out padding
 
         attn_mask = self._causal_mask(L, seqs.device)
         key_padding_mask = pad_mask
@@ -284,7 +291,9 @@ class UniSRec(nn.Module):
             # Zero padding in Q/K/V so NaN can never appear in dot-products
             normed = normed.masked_fill(pad_mask_3d, 0.0)
             mha_out, _ = self.attention_layers[i](
-                normed, normed, normed,
+                normed,
+                normed,
+                normed,
                 attn_mask=attn_mask,
                 key_padding_mask=key_padding_mask,
                 need_weights=False,

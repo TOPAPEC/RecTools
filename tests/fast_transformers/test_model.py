@@ -2,19 +2,23 @@
 
 import pickle
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from rectools import Columns
 from rectools.dataset import Dataset
-from rectools.fast_transformers import FlatSASRecConfig, FlatSASRecModel
+from rectools.fast_transformers import FlatSASRecModel
 
 
 def _make_model(**kwargs) -> FlatSASRecModel:
     defaults = dict(
-        n_factors=16, n_blocks=1, n_heads=2, session_max_len=8,
-        epochs=1, batch_size=16, lr=1e-3, verbose=0,
+        n_factors=16,
+        n_blocks=1,
+        n_heads=2,
+        session_max_len=8,
+        epochs=1,
+        batch_size=16,
+        lr=1e-3,
+        verbose=0,
     )
     defaults.update(kwargs)
     return FlatSASRecModel(**defaults)

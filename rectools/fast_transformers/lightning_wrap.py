@@ -2,8 +2,8 @@
 
 import typing as tp
 
-import torch
 import pytorch_lightning as pl
+import torch
 from torch import nn
 
 from .net import FlatSASRec
@@ -47,7 +47,9 @@ class FlatSASRecLightning(pl.LightningModule):
         if self.loss_name == "softmax":
             # logits: (B, L, n_items) — full catalog
             # targets need to be 0-indexed item ids (subtract 1 since item ids start from 1)
-            targets = y - 1  # shift to 0-based for CrossEntropyLoss; padding (0) becomes -1 -> ignore_index=0 won't work
+            targets = (
+                y - 1
+            )  # shift to 0-based for CrossEntropyLoss; padding (0) becomes -1 -> ignore_index=0 won't work
             # Actually, we set ignore_index=0 but padding maps to -1.
             # Let's use a different approach: set padding targets to 0 and use ignore_index=0
             targets = y.clone()

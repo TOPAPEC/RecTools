@@ -1,7 +1,7 @@
 """Tests for FlatSASRec network."""
 
-import torch
 import pytest
+import torch
 
 from rectools.fast_transformers.net import FlatSASRec
 
@@ -37,10 +37,7 @@ class TestFlatSASRec:
     def test_padding_invariance(self, net: FlatSASRec) -> None:
         """Different left-padding should produce same last-position embedding."""
         net.eval()
-        x1 = torch.tensor([[0, 0, 0, 1, 2]])
-        x2 = torch.tensor([[0, 0, 0, 0, 2]])
-        # Not exactly the same because sequence context differs,
-        # but if we use the same content the output should be identical
+        # Same content should produce identical output
         x_a = torch.tensor([[0, 0, 0, 5, 10]])
         x_b = torch.tensor([[0, 0, 0, 5, 10]])
         with torch.no_grad():

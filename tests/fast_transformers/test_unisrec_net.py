@@ -1,7 +1,7 @@
 """Tests for UniSRec network."""
 
-import torch
 import pytest
+import torch
 
 from rectools.fast_transformers.unisrec_net import UniSRec
 

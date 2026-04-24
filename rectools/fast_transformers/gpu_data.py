@@ -3,7 +3,8 @@
 import typing as tp
 
 import torch
-from torch.utils.data import Dataset as TorchDataset, DataLoader
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset as TorchDataset
 
 
 def build_sequences(
@@ -52,7 +53,9 @@ def build_sequences(
     if total_elements > 0:
         user_indices = torch.repeat_interleave(torch.arange(n_users, device=device), effective_lens)
         cumsum = effective_lens.cumsum(0)
-        offsets = torch.arange(total_elements, device=device) - torch.repeat_interleave(cumsum - effective_lens, effective_lens)
+        offsets = torch.arange(total_elements, device=device) - torch.repeat_interleave(
+            cumsum - effective_lens, effective_lens
+        )
 
         x_src = torch.repeat_interleave(ends - capped_lens, effective_lens) + offsets
         y_src = x_src + 1

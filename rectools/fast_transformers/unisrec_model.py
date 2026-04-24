@@ -3,13 +3,13 @@
 import typing as tp
 from pathlib import Path
 
-import torch
 import pytorch_lightning as pl
+import torch
 from pytorch_lightning.callbacks import EarlyStopping
 
+from .gpu_data import align_embeddings, build_sequences, make_dataloader
+from .unisrec_lightning import SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS, UniSRecLightning
 from .unisrec_net import UniSRec
-from .unisrec_lightning import UniSRecLightning, SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS
-from .gpu_data import build_sequences, align_embeddings, make_dataloader
 
 
 class UniSRecModel:
@@ -143,7 +143,12 @@ class UniSRecModel:
         )
 
     def _make_lightning(
-        self, net: UniSRec, param_groups: tp.List[tp.Dict], use_id: bool, max_epochs: int, train_dl: tp.Any,
+        self,
+        net: UniSRec,
+        param_groups: tp.List[tp.Dict],
+        use_id: bool,
+        max_epochs: int,
+        train_dl: tp.Any,
     ) -> UniSRecLightning:
         total_steps = len(train_dl) * max_epochs if self.scheduler else None
         return UniSRecLightning(
@@ -172,16 +177,22 @@ class UniSRecModel:
                 {"params": [net.whitening_bias], "lr": self.phase2_lr * 10.0, "weight_decay": 0.0},
             ]
             if net.head is not None:
-                groups.append({
-                    "params": list(net.head.parameters()),
-                    "lr": self.phase2_lr * self.lr_head,
-                    "weight_decay": self.weight_decay,
-                })
+                groups.append(
+                    {
+                        "params": list(net.head.parameters()),
+                        "lr": self.phase2_lr * self.lr_head,
+                        "weight_decay": self.weight_decay,
+                    }
+                )
         else:
             groups = [
                 {"params": list(net.bn_input.parameters()), "lr": self.phase2_lr, "weight_decay": 0.0},
                 {"params": list(net.bn_score.parameters()), "lr": self.phase2_lr, "weight_decay": 0.0},
-                {"params": list(net.head.parameters()), "lr": self.phase2_lr * self.lr_head, "weight_decay": self.weight_decay},
+                {
+                    "params": list(net.head.parameters()),
+                    "lr": self.phase2_lr * self.lr_head,
+                    "weight_decay": self.weight_decay,
+                },
             ]
         return groups
 
@@ -198,21 +209,27 @@ class UniSRecModel:
             ]
         head: tp.List[tp.Dict[str, tp.Any]] = []
         if net.head is not None:
-            head = [{"params": list(net.head.parameters()), "lr": self.phase3_lr * self.lr_head, "weight_decay": self.weight_decay}]
+            head = [
+                {
+                    "params": list(net.head.parameters()),
+                    "lr": self.phase3_lr * self.lr_head,
+                    "weight_decay": self.weight_decay,
+                }
+            ]
         transformer = [
             {"params": list(net.pos_emb.parameters()), "lr": self.phase3_lr * self.lr_transformer, "weight_decay": 0.0},
             {
                 "params": (
-                    [p for l in net.attention_layers for p in l.parameters()]
-                    + [p for l in net.forward_layers for p in l.parameters()]
+                    [p for layer in net.attention_layers for p in layer.parameters()]
+                    + [p for layer in net.forward_layers for p in layer.parameters()]
                 ),
                 "lr": self.phase3_lr * self.lr_transformer,
                 "weight_decay": self.weight_decay,
             },
             {
                 "params": (
-                    [p for l in net.attention_layernorms for p in l.parameters()]
-                    + [p for l in net.forward_layernorms for p in l.parameters()]
+                    [p for layer in net.attention_layernorms for p in layer.parameters()]
+                    + [p for layer in net.forward_layernorms for p in layer.parameters()]
                     + list(net.last_layernorm.parameters())
                 ),
                 "lr": self.phase3_lr,
@@ -246,7 +263,9 @@ class UniSRecModel:
         self
         """
         x, y, unique_items, unique_users = build_sequences(
-            user_ids, item_ids, timestamps,
+            user_ids,
+            item_ids,
+            timestamps,
             max_len=self.session_max_len,
             min_interactions=self.train_min_user_interactions,
         )
@@ -303,12 +322,15 @@ class UniSRecModel:
 
     def save_checkpoint(self, path: tp.Union[str, Path]) -> None:
         assert self._net is not None
-        torch.save({
-            "net": self._net.state_dict(),
-            "unique_items": self._unique_items,
-            "unique_users": self._unique_users,
-            "n_items": len(self._unique_items),
-        }, path)
+        torch.save(
+            {
+                "net": self._net.state_dict(),
+                "unique_items": self._unique_items,
+                "unique_users": self._unique_users,
+                "n_items": len(self._unique_items),
+            },
+            path,
+        )
 
     def load_checkpoint(self, path: tp.Union[str, Path], device: str = "cuda") -> None:
         ckpt = torch.load(path, map_location=device, weights_only=False)

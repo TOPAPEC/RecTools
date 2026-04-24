@@ -1,10 +1,10 @@
 """Tests for FlatSASRecLightning wrapper."""
 
-import torch
 import pytest
+import torch
 
-from rectools.fast_transformers.net import FlatSASRec
 from rectools.fast_transformers.lightning_wrap import FlatSASRecLightning
+from rectools.fast_transformers.net import FlatSASRec
 
 
 @pytest.fixture()
@@ -61,9 +61,7 @@ class TestFlatSASRecLightning:
         module = FlatSASRecLightning(net)
 
         # Snapshot parameters with dim > 1 before reinit
-        snapshots_before = {
-            name: p.clone() for name, p in module.net.named_parameters() if p.dim() > 1
-        }
+        snapshots_before = {name: p.clone() for name, p in module.net.named_parameters() if p.dim() > 1}
         assert len(snapshots_before) > 0, "Expected at least one param with dim > 1"
 
         # Force parameters to a constant value so reinit is detectable

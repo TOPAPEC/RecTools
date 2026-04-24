@@ -2,18 +2,15 @@
 
 import typing as tp
 
-import numpy as np
 import pandas as pd
-import torch
 import pytorch_lightning as pl
+import torch
 from scipy import sparse
 
-from rectools import Columns
 from rectools.dataset import Dataset
-from rectools.dataset.identifiers import IdMap
 from rectools.models.base import InternalRecoTriplet, ModelBase, ModelConfig
-from rectools.models.nn.transformers.sasrec import SASRecDataPreparator
 from rectools.models.nn.transformers.negative_sampler import CatalogUniformSampler
+from rectools.models.nn.transformers.sasrec import SASRecDataPreparator
 from rectools.types import InternalIdsArray
 from rectools.utils.config import BaseConfig
 
@@ -157,10 +154,6 @@ class FlatSASRecModel(ModelBase[FlatSASRecModelConfig]):
         dp.process_dataset_train(dataset)
         self._data_preparator = dp
 
-        n_items = dp.item_id_map.size  # includes extra tokens (padding)
-        # item ids in the preparator go from 0 (padding) to n_items-1
-        # FlatSASRec expects n_items = max real item count (embedding table = n_items+1 with padding at 0)
-        # The preparator's item_id_map.size includes the padding token, so real items = size - 1
         n_real_items = dp.item_id_map.size - dp.n_item_extra_tokens
 
         net = FlatSASRec(
@@ -242,7 +235,6 @@ class FlatSASRecModel(ModelBase[FlatSASRecModelConfig]):
         sorted_item_ids_to_recommend: tp.Optional[InternalIdsArray],
     ) -> InternalRecoTriplet:
         assert self._data_preparator is not None
-        device = next(self._net.parameters()).device  # type: ignore
 
         user_embs = self._get_user_embeddings(dataset)  # (n_users, D)
         item_embs = self._get_item_embeddings()  # (n_items, D)
@@ -278,7 +270,9 @@ class FlatSASRecModel(ModelBase[FlatSASRecModelConfig]):
             whitelist = wl[(wl >= 0) & (wl < item_embs.shape[0])]
 
         u_ids, i_ids, scores = rank_topk(
-            user_embs, item_embs, k,
+            user_embs,
+            item_embs,
+            k,
             filter_csr=filter_csr,
             whitelist=whitelist,
             batch_size=self.recommend_batch_size,
@@ -298,7 +292,6 @@ class FlatSASRecModel(ModelBase[FlatSASRecModelConfig]):
         sorted_item_ids_to_recommend: tp.Optional[InternalIdsArray],
     ) -> InternalRecoTriplet:
         assert self._data_preparator is not None and self._net is not None
-        device = next(self._net.parameters()).device
 
         item_embs = self._get_item_embeddings()  # (n_items, D)
         n_extra = self._data_preparator.n_item_extra_tokens
@@ -313,7 +306,9 @@ class FlatSASRecModel(ModelBase[FlatSASRecModelConfig]):
             whitelist = wl[(wl >= 0) & (wl < item_embs.shape[0])]
 
         t_ids, i_ids, scores = rank_topk(
-            target_embs, item_embs, k,
+            target_embs,
+            item_embs,
+            k,
             whitelist=whitelist,
             batch_size=self.recommend_batch_size,
         )

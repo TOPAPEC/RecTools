@@ -1,12 +1,11 @@
 """Tests for GPU-native sequence building and data utilities."""
 
 import torch
-import pytest
 
 from rectools.fast_transformers.gpu_data import (
-    build_sequences,
-    align_embeddings,
     GPUBatchDataset,
+    align_embeddings,
+    build_sequences,
     make_dataloader,
 )
 
@@ -108,9 +107,7 @@ class TestBuildSequences:
         item_ids = torch.tensor([10, 20, 30, 40, 50])
         timestamps = torch.tensor([1, 2, 3, 4, 5])
 
-        x, y, _, _ = build_sequences(
-            user_ids, item_ids, timestamps, max_len=3, min_interactions=2, device=DEVICE
-        )
+        x, y, _, _ = build_sequences(user_ids, item_ids, timestamps, max_len=3, min_interactions=2, device=DEVICE)
 
         # 5 items total. capped_lens = min(5, 3+1) = 4, effective = 3
         # Sorted items: 10->1, 20->2, 30->3, 40->4, 50->5
@@ -145,9 +142,7 @@ class TestBuildSequences:
         item_ids = torch.tensor([10, 20])
         timestamps = torch.tensor([1, 2])
 
-        x, y, _, _ = build_sequences(
-            user_ids, item_ids, timestamps, max_len=5, min_interactions=2, device=DEVICE
-        )
+        x, y, _, _ = build_sequences(user_ids, item_ids, timestamps, max_len=5, min_interactions=2, device=DEVICE)
 
         # 2 items => effective_len = 1 (capped_lens = 2, effective = 1)
         # x = [0, 0, 0, 0, 1], y = [0, 0, 0, 0, 2]
@@ -208,9 +203,7 @@ class TestBuildSequences:
         item_ids = torch.tensor([1, 2])
         timestamps = torch.tensor([1, 2])
 
-        x, y, _, _ = build_sequences(
-            user_ids, item_ids, timestamps, max_len=3, min_interactions=2, device=DEVICE
-        )
+        x, y, _, _ = build_sequences(user_ids, item_ids, timestamps, max_len=3, min_interactions=2, device=DEVICE)
 
         assert x.dtype == torch.long
         assert y.dtype == torch.long
@@ -221,9 +214,7 @@ class TestBuildSequences:
         item_ids = torch.tensor([10, 20, 30, 40])
         timestamps = torch.tensor([1, 2, 3, 4])
 
-        x, y, _, _ = build_sequences(
-            user_ids, item_ids, timestamps, max_len=3, min_interactions=2, device=DEVICE
-        )
+        x, y, _, _ = build_sequences(user_ids, item_ids, timestamps, max_len=3, min_interactions=2, device=DEVICE)
 
         # 4 items, max_len=3 => capped_lens = min(4, 4) = 4, effective = 3
         # No padding needed
@@ -257,12 +248,14 @@ class TestAlignEmbeddings:
 
     def test_2d_pretrained(self) -> None:
         """Align 2D pretrained embeddings to internal ID order."""
-        pretrained = torch.tensor([
-            [1.0, 2.0],  # external item 0
-            [3.0, 4.0],  # external item 1
-            [5.0, 6.0],  # external item 2
-            [7.0, 8.0],  # external item 3
-        ])
+        pretrained = torch.tensor(
+            [
+                [1.0, 2.0],  # external item 0
+                [3.0, 4.0],  # external item 1
+                [5.0, 6.0],  # external item 2
+                [7.0, 8.0],  # external item 3
+            ]
+        )
         # unique_items: external IDs that map to internal IDs 1, 2, 3
         unique_items = torch.tensor([2, 0, 3])
         n_items = 3
@@ -281,10 +274,12 @@ class TestAlignEmbeddings:
 
     def test_3d_pretrained(self) -> None:
         """Align 3D pretrained embeddings (multi-variant)."""
-        pretrained = torch.tensor([
-            [[1.0, 2.0], [3.0, 4.0]],  # item 0, 2 variants
-            [[5.0, 6.0], [7.0, 8.0]],  # item 1
-        ])
+        pretrained = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0]],  # item 0, 2 variants
+                [[5.0, 6.0], [7.0, 8.0]],  # item 1
+            ]
+        )
         unique_items = torch.tensor([1, 0])
         n_items = 2
 
@@ -310,10 +305,12 @@ class TestAlignEmbeddings:
 
     def test_out_of_range_indices(self) -> None:
         """Items with external IDs outside pretrained range should get zero embeddings."""
-        pretrained = torch.tensor([
-            [1.0, 2.0],  # external 0
-            [3.0, 4.0],  # external 1
-        ])
+        pretrained = torch.tensor(
+            [
+                [1.0, 2.0],  # external 0
+                [3.0, 4.0],  # external 1
+            ]
+        )
         # External ID 5 is out of range (pretrained has only 2 rows)
         unique_items = torch.tensor([0, 5, 1])
         n_items = 3

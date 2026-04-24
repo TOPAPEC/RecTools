@@ -2,17 +2,17 @@
 
 import math
 
-import torch
 import pytest
+import torch
 
-from rectools.fast_transformers.unisrec_net import UniSRec
 from rectools.fast_transformers.unisrec_lightning import (
-    UniSRecLightning,
-    _cosine_warmup_scheduler,
     SUPPORTED_LOSSES,
     SUPPORTED_OPTIMIZERS,
     SUPPORTED_SCHEDULERS,
+    UniSRecLightning,
+    _cosine_warmup_scheduler,
 )
+from rectools.fast_transformers.unisrec_net import UniSRec
 
 
 @pytest.fixture()
@@ -170,7 +170,10 @@ class TestCosineWarmupScheduler:
         min_lr_ratio = 0.1
         opt = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
         scheduler = _cosine_warmup_scheduler(
-            opt, warmup_steps=10, total_steps=100, min_lr_ratio=min_lr_ratio,
+            opt,
+            warmup_steps=10,
+            total_steps=100,
+            min_lr_ratio=min_lr_ratio,
         )
         lr_fn = scheduler.lr_lambdas[0]
         # At total_steps, progress = 1, cos(pi) = -1 => factor = min_lr_ratio
@@ -183,7 +186,10 @@ class TestCosineWarmupScheduler:
         min_lr_ratio = 0.0
         opt = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
         scheduler = _cosine_warmup_scheduler(
-            opt, warmup_steps=warmup_steps, total_steps=total_steps, min_lr_ratio=min_lr_ratio,
+            opt,
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+            min_lr_ratio=min_lr_ratio,
         )
         lr_fn = scheduler.lr_lambdas[0]
         midpoint = warmup_steps + (total_steps - warmup_steps) // 2  # 60
@@ -195,7 +201,10 @@ class TestCosineWarmupScheduler:
         min_lr_ratio = 0.3
         opt = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
         scheduler = _cosine_warmup_scheduler(
-            opt, warmup_steps=0, total_steps=100, min_lr_ratio=min_lr_ratio,
+            opt,
+            warmup_steps=0,
+            total_steps=100,
+            min_lr_ratio=min_lr_ratio,
         )
         lr_fn = scheduler.lr_lambdas[0]
         # At step 0 (warmup_steps=0, so cosine phase), progress=0, cos(0)=1 => factor=1.0

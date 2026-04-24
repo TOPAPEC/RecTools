@@ -143,7 +143,9 @@ class TestOptimizer:
 class TestScheduler:
     def test_cosine_warmup(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(scheduler="cosine_warmup", warmup_ratio=0.1, phase1_epochs=0, phase2_epochs=0, phase3_epochs=2)
+        model = _make_model(
+            scheduler="cosine_warmup", warmup_ratio=0.1, phase1_epochs=0, phase2_epochs=0, phase3_epochs=2
+        )
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
