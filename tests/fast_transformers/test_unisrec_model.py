@@ -1,29 +1,9 @@
-"""Tests for UniSRecModel."""
+"""Tests for UniSRecModel (standalone, tensor-based API)."""
 
-import numpy as np
-import pandas as pd
 import pytest
 import torch
 
-from rectools import Columns
-from rectools.dataset import Dataset
-from rectools.fast_transformers import UniSRecConfig, UniSRecModel
-
-
-def _make_dataset(n_users: int = 20, n_items: int = 25, seed: int = 42) -> Dataset:
-    rng = np.random.RandomState(seed)
-    rows = []
-    for u in range(n_users):
-        n_inter = rng.randint(3, 8)
-        items = rng.choice(n_items, size=n_inter, replace=False)
-        for rank, item in enumerate(items):
-            rows.append({
-                Columns.User: u,
-                Columns.Item: item,
-                Columns.Weight: 1.0,
-                Columns.Datetime: pd.Timestamp("2024-01-01") + pd.Timedelta(hours=rank),
-            })
-    return Dataset.construct(pd.DataFrame(rows))
+from rectools.fast_transformers import UniSRecModel
 
 
 def _make_embeddings(n_items: int = 25, dim: int = 64) -> torch.Tensor:
@@ -31,6 +11,24 @@ def _make_embeddings(n_items: int = 25, dim: int = 64) -> torch.Tensor:
     emb = torch.randn(n_items, dim)
     emb[0] = 0.0
     return emb
+
+
+def _make_interactions(n_users: int = 20, n_items: int = 25, seed: int = 42):
+    """Generate synthetic (user_ids, item_ids, timestamps) tensors."""
+    rng = torch.Generator().manual_seed(seed)
+    users, items, timestamps = [], [], []
+    for u in range(n_users):
+        n_inter = torch.randint(3, 8, (1,), generator=rng).item()
+        item_pool = torch.randperm(n_items, generator=rng)[:n_inter] + 1  # 1-based
+        for rank, item in enumerate(item_pool):
+            users.append(u)
+            items.append(item.item())
+            timestamps.append(rank)
+    return (
+        torch.tensor(users, dtype=torch.long),
+        torch.tensor(items, dtype=torch.long),
+        torch.tensor(timestamps, dtype=torch.long),
+    )
 
 
 def _make_model(**kwargs) -> UniSRecModel:
@@ -51,160 +49,139 @@ def _make_model(**kwargs) -> UniSRecModel:
     return UniSRecModel(**defaults)
 
 
-class TestFitRecommend:
-    def test_recommend_columns(self) -> None:
-        ds = _make_dataset()
+class TestFit:
+    def test_fit_returns_self(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model()
-        model.fit(ds)
-        users = list(range(5))
-        reco = model.recommend(users=users, dataset=ds, k=3, filter_viewed=False)
-        assert set(reco.columns) == {Columns.User, Columns.Item, Columns.Score, Columns.Rank}
-        assert reco[Columns.User].nunique() == 5
+        result = model.fit(user_ids, item_ids, timestamps)
+        assert result is model
 
-    def test_filter_viewed(self) -> None:
-        ds = _make_dataset()
+    def test_is_fitted_after_fit(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model()
-        model.fit(ds)
-        users = list(range(5))
-        reco = model.recommend(users=users, dataset=ds, k=5, filter_viewed=True)
-        interactions = ds.get_raw_interactions()
-        for uid in users:
-            viewed = set(interactions[interactions[Columns.User] == uid][Columns.Item])
-            recommended = set(reco[reco[Columns.User] == uid][Columns.Item])
-            assert viewed.isdisjoint(recommended), f"User {uid} got viewed items"
+        assert not model.is_fitted
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
 
-    def test_i2i(self) -> None:
-        ds = _make_dataset()
+    def test_net_accessible_after_fit(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model()
-        model.fit(ds)
-        items = list(range(5))
-        reco = model.recommend_to_items(target_items=items, dataset=ds, k=3)
-        assert set(reco.columns) == {Columns.TargetItem, Columns.Item, Columns.Score, Columns.Rank}
-        assert reco[Columns.TargetItem].nunique() == 5
+        model.fit(user_ids, item_ids, timestamps)
+        net = model.net
+        assert net is not None
 
-    def test_scores_not_nan(self) -> None:
-        ds = _make_dataset()
-        model = _make_model(phase1_epochs=2, phase3_epochs=2)
-        model.fit(ds)
-        users = list(range(ds.user_id_map.size))
-        reco = model.recommend(users=users, dataset=ds, k=5, filter_viewed=False)
-        assert len(reco) > 0
-        assert reco[Columns.Score].notna().all()
+    def test_item_id_mapping_has_original_ids(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model()
+        model.fit(user_ids, item_ids, timestamps)
+        mapping = model.item_id_mapping
+        original_unique = torch.unique(item_ids)
+        assert set(mapping.tolist()) == set(original_unique.tolist())
+
+    def test_net_not_accessible_before_fit(self) -> None:
+        model = _make_model()
+        with pytest.raises(AssertionError):
+            _ = model.net
 
 
 class TestPhaseSkipping:
     def test_skip_phase1(self) -> None:
-        ds = _make_dataset()
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(phase1_epochs=0)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
 
     def test_skip_phase2(self) -> None:
-        ds = _make_dataset()
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(phase2_epochs=0)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
+    def test_only_phase1(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(phase1_epochs=2, phase2_epochs=0, phase3_epochs=0)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
 
     def test_only_phase3(self) -> None:
-        ds = _make_dataset()
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(phase1_epochs=0, phase2_epochs=0, phase3_epochs=2)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
-
-
-class TestWithNegatives:
-    def test_sampled_loss(self) -> None:
-        ds = _make_dataset()
-        model = _make_model(n_negatives=4)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1, 2], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
-
-
-class TestFFNTypes:
-    @pytest.mark.parametrize("ffn_type", ["conv1d", "linear_gelu", "linear_relu"])
-    def test_ffn_type(self, ffn_type: str) -> None:
-        ds = _make_dataset()
-        model = _make_model(ffn_type=ffn_type, ffn_expansion=2, phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
 
 
 class TestLosses:
-    def test_bce_loss(self) -> None:
-        ds = _make_dataset()
-        model = _make_model(loss="BCE", n_negatives=4)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
+    def test_softmax_loss(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(loss="softmax", phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
 
-    def test_gbce_loss(self) -> None:
-        ds = _make_dataset()
-        model = _make_model(loss="gBCE", n_negatives=4, gbce_t=0.2)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
-
-    def test_sampled_softmax_loss(self) -> None:
-        ds = _make_dataset()
-        model = _make_model(loss="sampled_softmax", n_negatives=4)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
-
-    def test_invalid_loss(self) -> None:
+    def test_invalid_loss_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported loss"):
             _make_model(loss="invalid")
 
 
 class TestOptimizer:
-    def test_adam_optimizer(self) -> None:
-        ds = _make_dataset()
+    def test_adam(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(optimizer="adam", phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
-        model.fit(ds)
-        reco = model.recommend(users=[0], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
 
-    def test_invalid_optimizer(self) -> None:
+    def test_adamw(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(optimizer="adamw", phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
+    def test_invalid_optimizer_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported optimizer"):
             _make_model(optimizer="sgd")
 
 
 class TestScheduler:
     def test_cosine_warmup(self) -> None:
-        ds = _make_dataset()
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(scheduler="cosine_warmup", warmup_ratio=0.1, phase1_epochs=0, phase2_epochs=0, phase3_epochs=2)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
+    def test_invalid_scheduler_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported scheduler"):
+            _make_model(scheduler="step")
+
+
+class TestCheckpoint:
+    def test_save_load_roundtrip(self, tmp_path) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0)
+        model.fit(user_ids, item_ids, timestamps)
+
+        ckpt_path = tmp_path / "model.pt"
+        model.save_checkpoint(ckpt_path)
+
+        model2 = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0)
+        model2.load_checkpoint(ckpt_path, device="cpu")
+        assert model2.is_fitted
+
+        mapping1 = model.item_id_mapping
+        mapping2 = model2.item_id_mapping
+        assert torch.equal(mapping1, mapping2)
+
+
+class TestFFNTypes:
+    @pytest.mark.parametrize("ffn_type", ["conv1d", "linear_gelu", "linear_relu"])
+    def test_ffn_type(self, ffn_type: str) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(ffn_type=ffn_type, ffn_expansion=2, phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
 
 
 class TestEarlyStopping:
     def test_patience(self) -> None:
-        ds = _make_dataset()
+        user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(patience=2, phase1_epochs=0, phase2_epochs=0, phase3_epochs=5)
-        model.fit(ds)
-        reco = model.recommend(users=[0, 1], dataset=ds, k=3, filter_viewed=False)
-        assert len(reco) > 0
-
-
-class TestConfig:
-    def test_get_config(self) -> None:
-        model = _make_model(ffn_type="linear_gelu", loss="BCE", n_negatives=4, optimizer="adam", scheduler="cosine_warmup", patience=5)
-        config = model.get_config(mode="pydantic")
-        assert config.model.n_factors == 16
-        assert config.model.ffn_type == "linear_gelu"
-        assert config.model.loss == "BCE"
-        assert config.model.optimizer == "adam"
-        assert config.model.scheduler == "cosine_warmup"
-        assert config.model.patience == 5
-
-    def test_from_config_raises(self) -> None:
-        model = _make_model()
-        config = model.get_config(mode="pydantic")
-        with pytest.raises(NotImplementedError, match="pretrained_item_embeddings"):
-            UniSRecModel.from_config(config)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
