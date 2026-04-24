@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+- `rectools.fast_transformers` module — standalone transformer-based sequential recommenders that work directly with torch tensors, bypassing the `Dataset`/pandas pipeline. GPU-native sequence building via `build_sequences()` gives ~30x preprocessing speedup over `SASRecDataPreparator` on ML-20M
+- `FlatSASRec` network and `FlatSASRecModel` — flat SASRec implementation without the ItemNet hierarchy. Pre-norm transformer encoder with id-embeddings, causal masking, softmax and BCE losses. Integrates with RecTools `ModelBase` for compatibility with the standard `fit`/`recommend` API
+- `UniSRec` network and `UniSRecModel` — sequential recommender with pretrained text embeddings (e.g. Qwen) and a learnable PCA/BN adaptor. Three-phase training: (1) SASRec warm-up on ID embeddings, (2) adaptor-only with frozen transformer, (3) full fine-tune on pretrained embeddings. Configurable losses (softmax, BCE, gBCE, sampled_softmax), optimizers (Adam, AdamW), cosine warmup scheduler, early stopping, checkpoint save/load. `UniSRecModel.fit()` accepts raw `(user_ids, item_ids, timestamps)` tensors
+- `rank_topk()` utility for batched top-k scoring with CSR-based viewed-item filtering and item whitelist support
+- `align_embeddings()` for mapping pretrained embedding matrices to internal item ID order
+- `GPUBatchDataset` and `make_dataloader()` — lightweight torch Dataset/DataLoader wrappers for sequence training data
+- Configurable FFN blocks in `UniSRec`: `conv1d` (original paper), `linear_gelu`, `linear_relu` with adjustable expansion factor
+- Tests for all `fast_transformers` submodules (143 tests)
+
+
 ## [0.18.0] - 21.02.2026
 
 ### Added

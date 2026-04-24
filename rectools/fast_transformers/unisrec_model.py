@@ -312,8 +312,8 @@ class UniSRecModel:
 
     def load_checkpoint(self, path: tp.Union[str, Path], device: str = "cuda") -> None:
         ckpt = torch.load(path, map_location=device, weights_only=False)
-        self._unique_items = ckpt["unique_items"]
-        self._unique_users = ckpt["unique_users"]
+        self._unique_items = ckpt["unique_items"].cpu()
+        self._unique_users = ckpt["unique_users"].cpu()
         n_items = ckpt["n_items"]
 
         aligned_emb = align_embeddings(self.pretrained_item_embeddings, self._unique_items, n_items)

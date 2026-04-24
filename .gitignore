@@ -97,7 +97,7 @@ benchmark_results/
 # CatBoost
 catboost_info/
 
-# Dev testing folder
+# Dev artifacts
 training_folder/
 *.pt
 data/*
