@@ -7,9 +7,18 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping
 
-from .gpu_data import align_embeddings, build_sequences, make_dataloader
+from .gpu_data import align_embeddings, build_sequences, hash_item_ids, make_dataloader
 from .unisrec_lightning import SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS, UniSRecLightning
 from .unisrec_net import UniSRec
+
+
+class _ProjectAllWrapper(torch.nn.Module):
+    def __init__(self, net: UniSRec) -> None:
+        super().__init__()
+        self.net = net
+
+    def forward(self) -> torch.Tensor:
+        return self.net.project_all()
 
 
 class UniSRecModel:
@@ -73,6 +82,7 @@ class UniSRecModel:
         batch_size: int = 128,
         dataloader_num_workers: int = 0,
         train_min_user_interactions: int = 2,
+        id_mapping: str = "dense",
         verbose: int = 0,
     ) -> None:
         if loss not in SUPPORTED_LOSSES:
@@ -118,6 +128,7 @@ class UniSRecModel:
         self.batch_size = batch_size
         self.dataloader_num_workers = dataloader_num_workers
         self.train_min_user_interactions = train_min_user_interactions
+        self.id_mapping = id_mapping
         self.verbose = verbose
 
         self._net: tp.Optional[UniSRec] = None
@@ -268,12 +279,13 @@ class UniSRecModel:
             timestamps,
             max_len=self.session_max_len,
             min_interactions=self.train_min_user_interactions,
+            id_mapping=self.id_mapping,
         )
         self._unique_items = unique_items.cpu()
         self._unique_users = unique_users.cpu()
         n_items = len(unique_items)
 
-        aligned_emb = align_embeddings(self.pretrained_item_embeddings, unique_items, n_items)
+        aligned_emb = align_embeddings(self.pretrained_item_embeddings, unique_items, n_items, self.id_mapping)
 
         net = UniSRec(
             n_items=n_items,
@@ -328,6 +340,7 @@ class UniSRecModel:
                 "unique_items": self._unique_items,
                 "unique_users": self._unique_users,
                 "n_items": len(self._unique_items),
+                "id_mapping": self.id_mapping,
             },
             path,
         )
@@ -337,8 +350,9 @@ class UniSRecModel:
         self._unique_items = ckpt["unique_items"].cpu()
         self._unique_users = ckpt["unique_users"].cpu()
         n_items = ckpt["n_items"]
+        self.id_mapping = ckpt.get("id_mapping", "dense")
 
-        aligned_emb = align_embeddings(self.pretrained_item_embeddings, self._unique_items, n_items)
+        aligned_emb = align_embeddings(self.pretrained_item_embeddings, self._unique_items, n_items, self.id_mapping)
 
         self._net = UniSRec(
             n_items=n_items,
@@ -358,6 +372,81 @@ class UniSRecModel:
         self._net.load_state_dict(ckpt["net"])
         self._net.to(device).eval()
         self.is_fitted = True
+
+    # ── ONNX export ──
+
+    def export_to_onnx(
+        self,
+        encoder_path: tp.Union[str, Path],
+        items_path: tp.Optional[tp.Union[str, Path]] = None,
+        opset_version: int = 18,
+    ) -> None:
+        """Export the model to ONNX.
+
+        Parameters
+        ----------
+        encoder_path
+            Path for the encoder graph (input_ids -> hidden states).
+        items_path
+            If given, also exports project_all (-> item embeddings).
+        opset_version
+            ONNX opset version (default 18).
+        """
+        assert self._net is not None, "Model not fitted or loaded"
+        net = self._net
+        was_training = net.training
+        net.eval()
+
+        device = next(net.parameters()).device
+        dummy = torch.zeros(1, 5, dtype=torch.long, device=device)
+
+        torch.onnx.export(
+            net,
+            (dummy, False),
+            str(encoder_path),
+            input_names=["input_ids"],
+            output_names=["hidden"],
+            opset_version=opset_version,
+        )
+
+        if items_path is not None:
+            wrapper = _ProjectAllWrapper(net)
+            wrapper.eval()
+            torch.onnx.export(
+                wrapper,
+                (),
+                str(items_path),
+                input_names=[],
+                output_names=["item_embs"],
+                opset_version=opset_version,
+            )
+
+        if was_training:
+            net.train()
+
+    def map_item_ids(self, external_ids: torch.Tensor) -> torch.Tensor:
+        """Map external item IDs to internal IDs used by the model.
+
+        Parameters
+        ----------
+        external_ids : LongTensor
+            External item IDs.
+
+        Returns
+        -------
+        LongTensor
+            Internal IDs in ``[0, n_items]``.  0 means unknown item.
+        """
+        assert self._unique_items is not None, "Model not fitted or loaded"
+        if self.id_mapping == "hash":
+            n_items = len(self._unique_items)
+            known = torch.isin(external_ids, self._unique_items)
+            result = torch.zeros_like(external_ids)
+            result[known] = hash_item_ids(external_ids[known], n_items)
+            return result
+
+        lookup = {int(v): i + 1 for i, v in enumerate(self._unique_items.tolist())}
+        return torch.tensor([lookup.get(int(x), 0) for x in external_ids.tolist()], dtype=torch.long)
 
     @property
     def net(self) -> UniSRec:

@@ -1,11 +1,15 @@
 """Tests for GPU-native sequence building and data utilities."""
 
+import hashlib
+
+import pytest
 import torch
 
 from rectools.fast_transformers.gpu_data import (
     GPUBatchDataset,
     align_embeddings,
     build_sequences,
+    hash_item_ids,
     make_dataloader,
 )
 
@@ -455,3 +459,176 @@ class TestMakeDataloader:
         batch = next(iter(dl))
         assert batch["x"].shape == (1, 3)
         assert batch["y"].shape == (1, 3)
+
+
+class TestHashItemIds:
+    """Tests for hash_item_ids and _splitmix64."""
+
+    def test_output_range(self) -> None:
+        ids = torch.tensor([0, 1, 100, 999, -5])
+        result = hash_item_ids(ids, 50)
+        assert result.min() >= 1
+        assert result.max() <= 50
+
+    def test_deterministic(self) -> None:
+        ids = torch.tensor([1, 2, 3])
+        r1 = hash_item_ids(ids, 100)
+        r2 = hash_item_ids(ids, 100)
+        assert r1.tolist() == r2.tolist()
+
+    def test_different_inputs_spread(self) -> None:
+        ids = torch.arange(100)
+        result = hash_item_ids(ids, 1000)
+        assert len(result.unique()) >= 90
+
+    def test_large_negative_values(self) -> None:
+        ids = torch.tensor([-(2**62), -(2**60), -1, 0, 1, 2**60, 2**62])
+        result = hash_item_ids(ids, 200)
+        assert result.min() >= 1
+        assert result.max() <= 200
+
+    def test_string_derived_ids(self) -> None:
+        """Workflow: hash strings via hashlib -> int64 tensor -> hash_item_ids."""
+        strings = ["item_abc", "product_42", "sku-99", "uuid-xxx-yyy", ""]
+        int_ids = torch.tensor(
+            [int.from_bytes(hashlib.sha256(s.encode()).digest()[:8], "little", signed=True) for s in strings],
+            dtype=torch.long,
+        )
+        result = hash_item_ids(int_ids, 100)
+        assert result.min() >= 1
+        assert result.max() <= 100
+        assert result.shape == (5,)
+
+    def test_string_ids_deterministic(self) -> None:
+        strings = ["hello", "world"]
+        int_ids = torch.tensor(
+            [int.from_bytes(hashlib.sha256(s.encode()).digest()[:8], "little", signed=True) for s in strings],
+            dtype=torch.long,
+        )
+        r1 = hash_item_ids(int_ids, 50)
+        r2 = hash_item_ids(int_ids, 50)
+        assert r1.tolist() == r2.tolist()
+
+    def test_string_ids_spread(self) -> None:
+        """Many distinct strings should produce well-spread hash values."""
+        strings = [f"item_{i}" for i in range(200)]
+        int_ids = torch.tensor(
+            [int.from_bytes(hashlib.sha256(s.encode()).digest()[:8], "little", signed=True) for s in strings],
+            dtype=torch.long,
+        )
+        result = hash_item_ids(int_ids, 1000)
+        assert len(result.unique()) >= 180
+
+
+class TestBuildSequencesHash:
+    """Tests for build_sequences with id_mapping='hash'."""
+
+    def test_basic_shape(self) -> None:
+        user_ids = torch.tensor([0, 0, 0, 1, 1, 1])
+        item_ids = torch.tensor([10, 20, 30, 40, 50, 60])
+        timestamps = torch.tensor([1, 2, 3, 4, 5, 6])
+        x, y, unique_items, result_users = build_sequences(
+            user_ids, item_ids, timestamps, max_len=4, min_interactions=2, device=DEVICE, id_mapping="hash"
+        )
+        assert x.shape == (2, 4)
+        assert y.shape == (2, 4)
+        assert result_users.tolist() == [0, 1]
+
+    def test_values_in_range(self) -> None:
+        user_ids = torch.tensor([0, 0, 0, 1, 1, 1])
+        item_ids = torch.tensor([10, 20, 30, 40, 50, 60])
+        timestamps = torch.tensor([1, 2, 3, 4, 5, 6])
+        x, y, unique_items, _ = build_sequences(
+            user_ids, item_ids, timestamps, max_len=4, min_interactions=2, device=DEVICE, id_mapping="hash"
+        )
+        n_unique = len(unique_items)
+        nonzero_x = x[x != 0]
+        assert nonzero_x.min() >= 1
+        assert nonzero_x.max() <= n_unique
+        nonzero_y = y[y != 0]
+        assert nonzero_y.min() >= 1
+        assert nonzero_y.max() <= n_unique
+
+    def test_left_padding_preserved(self) -> None:
+        user_ids = torch.tensor([0, 0])
+        item_ids = torch.tensor([10, 20])
+        timestamps = torch.tensor([1, 2])
+        x, y, _, _ = build_sequences(
+            user_ids, item_ids, timestamps, max_len=5, min_interactions=2, device=DEVICE, id_mapping="hash"
+        )
+        assert x[0, :4].tolist() == [0, 0, 0, 0]
+        assert x[0, 4] != 0
+
+    def test_unique_items_unchanged(self) -> None:
+        """unique_items is always the sorted set of external IDs, regardless of id_mapping."""
+        user_ids = torch.tensor([0, 0, 0])
+        item_ids = torch.tensor([100, 50, 200])
+        timestamps = torch.tensor([1, 2, 3])
+        _, _, unique_items, _ = build_sequences(
+            user_ids, item_ids, timestamps, max_len=5, min_interactions=2, device=DEVICE, id_mapping="hash"
+        )
+        assert unique_items.tolist() == [50, 100, 200]
+
+    def test_invalid_id_mapping_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown id_mapping"):
+            build_sequences(
+                torch.tensor([0, 0]),
+                torch.tensor([1, 2]),
+                torch.tensor([1, 2]),
+                max_len=3,
+                min_interactions=2,
+                device=DEVICE,
+                id_mapping="invalid",
+            )
+
+    def test_same_item_same_hash(self) -> None:
+        """Same external item ID used by different users should get the same internal hash."""
+        user_ids = torch.tensor([0, 0, 0, 1, 1, 1])
+        item_ids = torch.tensor([10, 20, 30, 20, 30, 40])
+        timestamps = torch.tensor([1, 2, 3, 4, 5, 6])
+        x, y, _, _ = build_sequences(
+            user_ids, item_ids, timestamps, max_len=4, min_interactions=2, device=DEVICE, id_mapping="hash"
+        )
+        hash_20 = hash_item_ids(torch.tensor([20]), len(torch.unique(item_ids))).item()
+        hash_30 = hash_item_ids(torch.tensor([30]), len(torch.unique(item_ids))).item()
+        all_vals = torch.cat([x.flatten(), y.flatten()])
+        assert hash_20 in all_vals.tolist()
+        assert hash_30 in all_vals.tolist()
+
+
+class TestAlignEmbeddingsHash:
+    """Tests for align_embeddings with id_mapping='hash'."""
+
+    def test_embeddings_at_hash_positions(self) -> None:
+        pretrained = torch.zeros(4, 2)
+        pretrained[1] = torch.tensor([3.0, 4.0])
+        pretrained[2] = torch.tensor([5.0, 6.0])
+        pretrained[3] = torch.tensor([7.0, 8.0])
+        unique_items = torch.tensor([1, 2, 3])
+        n_items = 10
+        aligned = align_embeddings(pretrained, unique_items, n_items, id_mapping="hash")
+        assert aligned.shape == (11, 2)
+        assert aligned[0].tolist() == [0.0, 0.0]
+        positions = hash_item_ids(unique_items, n_items)
+        for i, ext_id in enumerate(unique_items):
+            pos = positions[i].item()
+            assert aligned[pos].tolist() == pretrained[ext_id].tolist()
+
+    def test_3d_hash_mode(self) -> None:
+        pretrained = torch.zeros(4, 2, 2)
+        pretrained[1] = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        pretrained[2] = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+        pretrained[3] = torch.tensor([[9.0, 10.0], [11.0, 12.0]])
+        unique_items = torch.tensor([1, 2, 3])
+        n_items = 10
+        aligned = align_embeddings(pretrained, unique_items, n_items, id_mapping="hash")
+        assert aligned.shape == (11, 2, 2)
+        assert aligned[0].tolist() == [[0.0, 0.0], [0.0, 0.0]]
+        positions = hash_item_ids(unique_items, n_items)
+        for i, ext_id in enumerate(unique_items):
+            pos = positions[i].item()
+            torch.testing.assert_close(aligned[pos], pretrained[ext_id])
+
+    def test_invalid_id_mapping_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown id_mapping"):
+            align_embeddings(torch.randn(5, 2), torch.tensor([1, 2]), 2, id_mapping="bad")

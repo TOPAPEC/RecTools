@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from rectools.fast_transformers import UniSRecModel
+from rectools.fast_transformers.gpu_data import hash_item_ids
 
 
 def _make_embeddings(n_items: int = 25, dim: int = 64) -> torch.Tensor:
@@ -187,3 +188,45 @@ class TestEarlyStopping:
         model = _make_model(patience=2, phase1_epochs=0, phase2_epochs=0, phase3_epochs=5)
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
+
+
+class TestMapItemIds:
+    def test_dense_known_items(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0)
+        model.fit(user_ids, item_ids, timestamps)
+        unique = model.item_id_mapping
+        result = model.map_item_ids(unique)
+        expected = torch.arange(1, len(unique) + 1, dtype=torch.long)
+        assert result.tolist() == expected.tolist()
+
+    def test_dense_unknown_items(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0)
+        model.fit(user_ids, item_ids, timestamps)
+        unknown = torch.tensor([9999, 8888], dtype=torch.long)
+        result = model.map_item_ids(unknown)
+        assert result.tolist() == [0, 0]
+
+    def test_hash_known_items(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0, id_mapping="hash")
+        model.fit(user_ids, item_ids, timestamps)
+        unique = model.item_id_mapping
+        n_items = len(unique)
+        result = model.map_item_ids(unique)
+        expected = hash_item_ids(unique, n_items)
+        assert result.tolist() == expected.tolist()
+
+    def test_hash_unknown_items(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0, id_mapping="hash")
+        model.fit(user_ids, item_ids, timestamps)
+        unknown = torch.tensor([9999, 8888], dtype=torch.long)
+        result = model.map_item_ids(unknown)
+        assert result.tolist() == [0, 0]
+
+    def test_unfitted_raises(self) -> None:
+        model = _make_model()
+        with pytest.raises(AssertionError):
+            model.map_item_ids(torch.tensor([1, 2]))
