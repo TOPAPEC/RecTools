@@ -1,91 +1,20 @@
-"""UniSRecModel: ModelBase wrapper with configurable three-phase training."""
+"""UniSRecModel: standalone model with configurable three-phase training."""
 
 import typing as tp
+from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping
-from scipy import sparse
-
-from rectools import Columns
-from rectools.dataset import Dataset
-from rectools.models.base import InternalRecoTriplet, ModelBase, ModelConfig
-from rectools.models.nn.transformers.sasrec import SASRecDataPreparator
-from rectools.models.nn.transformers.negative_sampler import CatalogUniformSampler
-from rectools.types import InternalIdsArray
-from rectools.utils.config import BaseConfig
 
 from .unisrec_net import UniSRec
 from .unisrec_lightning import UniSRecLightning, SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS
-from .ranking import rank_topk
+from .gpu_data import build_sequences, align_embeddings, make_dataloader
 
 
-class UniSRecConfig(BaseConfig):
-    """Hyperparameters for UniSRecModel (without pretrained embeddings)."""
-
-    # architecture
-    n_factors: int = 256
-    projection_hidden: int = 512
-    n_blocks: int = 2
-    n_heads: int = 1
-    session_max_len: int = 200
-    dropout: float = 0.1
-    adaptor_dropout: float = 0.2
-    adaptor_type: str = "pca"
-    use_adaptor_ffn: bool = True
-    ffn_type: str = "conv1d"
-    ffn_expansion: int = 1
-
-    # training phases
-    phase1_epochs: int = 10
-    phase2_epochs: int = 10
-    phase3_epochs: int = 10
-    phase1_lr: float = 1e-3
-    phase2_lr: float = 3e-4
-    phase3_lr: float = 1e-4
-    lr_head: float = 0.3
-    lr_wp: float = 0.1
-    lr_transformer: float = 3.0
-
-    # optimizer / scheduler
-    optimizer: str = "adamw"
-    scheduler: tp.Optional[str] = None
-    warmup_ratio: float = 0.05
-    min_lr_ratio: float = 0.1
-    grad_clip: float = 1.0
-    weight_decay: float = 0.01
-
-    # loss
-    loss: str = "softmax"
-    gbce_t: float = 0.2
-    n_negatives: tp.Optional[int] = None
-
-    # early stopping
-    patience: tp.Optional[int] = None
-
-    # data
-    batch_size: int = 128
-    recommend_batch_size: int = 256
-    dataloader_num_workers: int = 0
-    train_min_user_interactions: int = 2
-
-
-class UniSRecModelConfig(ModelConfig):
-    """Full model config (cls + verbose + hyper-params)."""
-
-    model: UniSRecConfig = UniSRecConfig()
-
-
-def _leave_last_out_mask(interactions: pd.DataFrame, **kwargs: tp.Any) -> pd.Series:
-    """Default validation mask: last interaction per user."""
-    return interactions.groupby(Columns.User).cumcount(ascending=False) == 0
-
-
-class UniSRecModel(ModelBase[UniSRecModelConfig]):
+class UniSRecModel:
     """
-    UniSRec integrated into RecTools via ``ModelBase``.
+    UniSRec sequential recommender with pretrained text embeddings.
 
     Three training phases
     ---------------------
@@ -100,14 +29,7 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         ``(max_external_item_id + 1, n_variants, D_text)``.
         Index *i* holds the text embedding for the item whose **external** ID
         equals *i*.  Index 0 is padding (zeros).
-    data_preparator : object, optional
-        Custom data preparator. Must implement the same interface as
-        ``SASRecDataPreparator``. If None, one is created automatically.
     """
-
-    config_class = UniSRecModelConfig
-    recommends_for_warm = False
-    recommends_for_cold = False
 
     def __init__(
         self,
@@ -149,15 +71,10 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         patience: tp.Optional[int] = None,
         # data
         batch_size: int = 128,
-        recommend_batch_size: int = 256,
         dataloader_num_workers: int = 0,
         train_min_user_interactions: int = 2,
-        # misc
-        data_preparator: tp.Any = None,
         verbose: int = 0,
     ) -> None:
-        super().__init__(verbose=verbose)
-
         if loss not in SUPPORTED_LOSSES:
             raise ValueError(f"Unsupported loss '{loss}'. Choose from {SUPPORTED_LOSSES}")
         if loss in ("BCE", "gBCE", "sampled_softmax") and n_negatives is None:
@@ -199,85 +116,16 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
         self.n_negatives = n_negatives
         self.patience = patience
         self.batch_size = batch_size
-        self.recommend_batch_size = recommend_batch_size
         self.dataloader_num_workers = dataloader_num_workers
         self.train_min_user_interactions = train_min_user_interactions
-        self._custom_data_preparator = data_preparator
+        self.verbose = verbose
 
         self._net: tp.Optional[UniSRec] = None
-        self._data_preparator: tp.Optional[tp.Any] = None
-
-    # ── config (embeddings + data_preparator not serialised) ──
-
-    def _get_config(self) -> UniSRecModelConfig:
-        return UniSRecModelConfig(
-            cls=self.__class__,
-            verbose=self.verbose,
-            model=UniSRecConfig(
-                n_factors=self.n_factors,
-                projection_hidden=self.projection_hidden,
-                n_blocks=self.n_blocks,
-                n_heads=self.n_heads,
-                session_max_len=self.session_max_len,
-                dropout=self.dropout,
-                adaptor_dropout=self.adaptor_dropout,
-                adaptor_type=self.adaptor_type,
-                use_adaptor_ffn=self.use_adaptor_ffn,
-                ffn_type=self.ffn_type,
-                ffn_expansion=self.ffn_expansion,
-                phase1_epochs=self.phase1_epochs,
-                phase2_epochs=self.phase2_epochs,
-                phase3_epochs=self.phase3_epochs,
-                phase1_lr=self.phase1_lr,
-                phase2_lr=self.phase2_lr,
-                phase3_lr=self.phase3_lr,
-                lr_head=self.lr_head,
-                lr_wp=self.lr_wp,
-                lr_transformer=self.lr_transformer,
-                optimizer=self.optimizer,
-                scheduler=self.scheduler,
-                warmup_ratio=self.warmup_ratio,
-                min_lr_ratio=self.min_lr_ratio,
-                grad_clip=self.grad_clip,
-                weight_decay=self.weight_decay,
-                loss=self.loss,
-                gbce_t=self.gbce_t,
-                n_negatives=self.n_negatives,
-                patience=self.patience,
-                batch_size=self.batch_size,
-                recommend_batch_size=self.recommend_batch_size,
-                dataloader_num_workers=self.dataloader_num_workers,
-                train_min_user_interactions=self.train_min_user_interactions,
-            ),
-        )
-
-    @classmethod
-    def _from_config(cls, config: UniSRecModelConfig) -> "UniSRecModel":
-        raise NotImplementedError(
-            "UniSRecModel cannot be restored from config alone -- "
-            "pretrained_item_embeddings must be supplied at construction time."
-        )
+        self._unique_items: tp.Optional[torch.Tensor] = None
+        self._unique_users: tp.Optional[torch.Tensor] = None
+        self.is_fitted: bool = False
 
     # ── helpers ──
-
-    def _align_embeddings(self, dp: tp.Any) -> torch.Tensor:
-        """Reindex pretrained_item_embeddings to the preparator's internal IDs."""
-        ext_ids = dp.item_id_map.to_external.values
-        n_internal = dp.item_id_map.size
-        n_extra = dp.n_item_extra_tokens
-
-        emb = self.pretrained_item_embeddings
-        if emb.ndim == 2:
-            aligned = torch.zeros(n_internal, emb.shape[1])
-        else:
-            aligned = torch.zeros(n_internal, emb.shape[1], emb.shape[2])
-
-        for int_id in range(n_extra, n_internal):
-            ext_id = int(ext_ids[int_id])
-            if 0 <= ext_id < emb.shape[0]:
-                aligned[int_id] = emb[ext_id]
-
-        return aligned
 
     def _make_trainer(self, max_epochs: int, val_dl: tp.Any = None) -> pl.Trainer:
         callbacks = []
@@ -375,35 +223,41 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
 
     # ── fit ──
 
-    def _fit(self, dataset: Dataset, *args: tp.Any, **kwargs: tp.Any) -> None:
-        # Data preparation
-        if self._custom_data_preparator is not None:
-            dp = self._custom_data_preparator
-        else:
-            requires_neg = self.loss in ("BCE", "gBCE", "sampled_softmax") or self.n_negatives is not None
-            negative_sampler = CatalogUniformSampler(n_negatives=self.n_negatives) if requires_neg else None
-            n_negatives_dp = self.n_negatives if requires_neg else None
+    def fit(
+        self,
+        user_ids: torch.Tensor,
+        item_ids: torch.Tensor,
+        timestamps: torch.Tensor,
+    ) -> "UniSRecModel":
+        """
+        Train the model on interaction data.
 
-            dp_kwargs: tp.Dict[str, tp.Any] = dict(
-                session_max_len=self.session_max_len,
-                batch_size=self.batch_size,
-                dataloader_num_workers=self.dataloader_num_workers,
-                train_min_user_interactions=self.train_min_user_interactions,
-                n_negatives=n_negatives_dp,
-                negative_sampler=negative_sampler,
-            )
-            if self.patience is not None:
-                dp_kwargs["get_val_mask_func"] = _leave_last_out_mask
-            dp = SASRecDataPreparator(**dp_kwargs)
+        Parameters
+        ----------
+        user_ids : LongTensor (N,)
+            External user IDs for each interaction.
+        item_ids : LongTensor (N,)
+            External item IDs for each interaction.
+        timestamps : LongTensor (N,)
+            Timestamps (any monotonic int64 values).
 
-        dp.process_dataset_train(dataset)
-        self._data_preparator = dp
+        Returns
+        -------
+        self
+        """
+        x, y, unique_items, unique_users = build_sequences(
+            user_ids, item_ids, timestamps,
+            max_len=self.session_max_len,
+            min_interactions=self.train_min_user_interactions,
+        )
+        self._unique_items = unique_items.cpu()
+        self._unique_users = unique_users.cpu()
+        n_items = len(unique_items)
 
-        n_real_items = dp.item_id_map.size - dp.n_item_extra_tokens
-        aligned_emb = self._align_embeddings(dp)
+        aligned_emb = align_embeddings(self.pretrained_item_embeddings, unique_items, n_items)
 
         net = UniSRec(
-            n_items=n_real_items,
+            n_items=n_items,
             pretrained_embeddings=aligned_emb,
             n_factors=self.n_factors,
             projection_hidden=self.projection_hidden,
@@ -418,141 +272,76 @@ class UniSRecModel(ModelBase[UniSRecModelConfig]):
             ffn_expansion=self.ffn_expansion,
         )
 
-        train_dl = dp.get_dataloader_train()
-        val_dl = dp.get_dataloader_val() if self.patience is not None else None
+        train_dl = make_dataloader(x, y, batch_size=self.batch_size, shuffle=True)
+
+        val_dl = None
+        if self.patience is not None:
+            val_y_last = y[:, -1:]
+            val_dl = make_dataloader(x, val_y_last, batch_size=self.batch_size, shuffle=False)
 
         def _run_phase(param_groups: tp.List[tp.Dict], use_id: bool, max_epochs: int) -> None:
             lm = self._make_lightning(net, param_groups, use_id, max_epochs, train_dl)
             trainer = self._make_trainer(max_epochs, val_dl)
             trainer.fit(lm, train_dl, val_dl)
 
-        # Phase 1: ID embeddings
         if self.phase1_epochs > 0:
             _run_phase(self._phase1_params(net), use_id=True, max_epochs=self.phase1_epochs)
 
-        # Phase 2: adaptor only (transformer frozen)
         if self.phase2_epochs > 0 and self.use_adaptor_ffn:
             net.freeze_transformer()
             _run_phase(self._phase2_params(net), use_id=False, max_epochs=self.phase2_epochs)
 
-        # Phase 3: full fine-tune
         if self.phase3_epochs > 0:
             net.unfreeze_transformer()
             _run_phase(self._phase3_params(net), use_id=False, max_epochs=self.phase3_epochs)
 
         self._net = net
+        self.is_fitted = True
+        return self
 
-    # ── dataset transforms ──
+    # ── save / load ──
 
-    def _custom_transform_dataset_u2i(
-        self,
-        dataset: Dataset,
-        users: tp.Any,
-        on_unsupported_targets: tp.Any,
-        context: tp.Optional[pd.DataFrame] = None,
-    ) -> Dataset:
-        assert self._data_preparator is not None
-        return self._data_preparator.transform_dataset_u2i(dataset, users)
-
-    def _custom_transform_dataset_i2i(
-        self, dataset: Dataset, target_items: tp.Any, on_unsupported_targets: tp.Any
-    ) -> Dataset:
-        assert self._data_preparator is not None
-        return self._data_preparator.transform_dataset_i2i(dataset)
-
-    # ── embeddings for ranking ──
-
-    @torch.no_grad()
-    def _get_user_embeddings(self, dataset: Dataset) -> torch.Tensor:
-        assert self._data_preparator is not None and self._net is not None
-        self._net.eval()
-        device = next(self._net.parameters()).device
-        recommend_dl = self._data_preparator.get_dataloader_recommend(dataset, self.recommend_batch_size)
-        all_embs = []
-        for batch in recommend_dl:
-            x = batch["x"].to(device)
-            all_embs.append(self._net.encode_last(x, use_id=False))
-        return torch.cat(all_embs, dim=0)
-
-    @torch.no_grad()
-    def _get_item_embeddings(self) -> torch.Tensor:
+    def save_checkpoint(self, path: tp.Union[str, Path]) -> None:
         assert self._net is not None
-        self._net.eval()
-        all_emb = self._net.project_all()
-        return all_emb[1:]
+        torch.save({
+            "net": self._net.state_dict(),
+            "unique_items": self._unique_items,
+            "unique_users": self._unique_users,
+            "n_items": len(self._unique_items),
+        }, path)
 
-    # ── recommend ──
+    def load_checkpoint(self, path: tp.Union[str, Path], device: str = "cuda") -> None:
+        ckpt = torch.load(path, map_location=device, weights_only=False)
+        self._unique_items = ckpt["unique_items"]
+        self._unique_users = ckpt["unique_users"]
+        n_items = ckpt["n_items"]
 
-    def _recommend_u2i(
-        self,
-        user_ids: InternalIdsArray,
-        dataset: Dataset,
-        k: int,
-        filter_viewed: bool,
-        sorted_item_ids_to_recommend: tp.Optional[InternalIdsArray],
-    ) -> InternalRecoTriplet:
-        assert self._data_preparator is not None
-        device = next(self._net.parameters()).device  # type: ignore[union-attr]
+        aligned_emb = align_embeddings(self.pretrained_item_embeddings, self._unique_items, n_items)
 
-        user_embs = self._get_user_embeddings(dataset)
-        item_embs = self._get_item_embeddings()
-
-        filter_csr = None
-        if filter_viewed:
-            ui_mat = dataset.get_user_item_matrix(include_weights=False)
-            n_users_mat = ui_mat.shape[0]
-            n_items_emb = item_embs.shape[0]
-            n_extra = self._data_preparator.n_item_extra_tokens
-
-            sliced = ui_mat[:, n_extra:] if ui_mat.shape[1] > n_extra else sparse.csr_matrix((n_users_mat, 0))
-            n_cols = sliced.shape[1]
-            if n_cols < n_items_emb:
-                filter_csr = sparse.hstack([sliced, sparse.csr_matrix((n_users_mat, n_items_emb - n_cols))], format="csr")
-            elif n_cols > n_items_emb:
-                filter_csr = sliced[:, :n_items_emb]
-            else:
-                filter_csr = sliced
-
-        whitelist = None
-        if sorted_item_ids_to_recommend is not None:
-            n_extra = self._data_preparator.n_item_extra_tokens
-            wl = sorted_item_ids_to_recommend - n_extra
-            whitelist = wl[(wl >= 0) & (wl < item_embs.shape[0])]
-
-        u_ids, i_ids, scores = rank_topk(
-            user_embs, item_embs, k,
-            filter_csr=filter_csr, whitelist=whitelist, batch_size=self.recommend_batch_size,
+        self._net = UniSRec(
+            n_items=n_items,
+            pretrained_embeddings=aligned_emb,
+            n_factors=self.n_factors,
+            projection_hidden=self.projection_hidden,
+            n_blocks=self.n_blocks,
+            n_heads=self.n_heads,
+            session_max_len=self.session_max_len,
+            dropout=self.dropout,
+            adaptor_dropout=self.adaptor_dropout,
+            adaptor_type=self.adaptor_type,
+            use_adaptor_ffn=self.use_adaptor_ffn,
+            ffn_type=self.ffn_type,
+            ffn_expansion=self.ffn_expansion,
         )
+        self._net.load_state_dict(ckpt["net"])
+        self._net.to(device).eval()
+        self.is_fitted = True
 
-        n_extra = self._data_preparator.n_item_extra_tokens
-        i_ids = i_ids + n_extra
-        return u_ids, i_ids, scores
+    @property
+    def net(self) -> UniSRec:
+        assert self._net is not None, "Model not fitted or loaded"
+        return self._net
 
-    def _recommend_i2i(
-        self,
-        target_ids: InternalIdsArray,
-        dataset: Dataset,
-        k: int,
-        sorted_item_ids_to_recommend: tp.Optional[InternalIdsArray],
-    ) -> InternalRecoTriplet:
-        assert self._data_preparator is not None and self._net is not None
-
-        item_embs = self._get_item_embeddings()
-        n_extra = self._data_preparator.n_item_extra_tokens
-
-        target_emb_idx = target_ids - n_extra
-        target_embs = item_embs[target_emb_idx]
-
-        whitelist = None
-        if sorted_item_ids_to_recommend is not None:
-            wl = sorted_item_ids_to_recommend - n_extra
-            whitelist = wl[(wl >= 0) & (wl < item_embs.shape[0])]
-
-        t_ids, i_ids, scores = rank_topk(
-            target_embs, item_embs, k,
-            whitelist=whitelist, batch_size=self.recommend_batch_size,
-        )
-
-        result_target_ids = target_ids[t_ids]
-        result_item_ids = i_ids + n_extra
-        return result_target_ids, result_item_ids, scores
+    @property
+    def item_id_mapping(self) -> torch.Tensor:
+        return self._unique_items

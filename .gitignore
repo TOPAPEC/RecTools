@@ -96,3 +96,8 @@ benchmark_results/
 
 # CatBoost
 catboost_info/
+
+# Dev testing folder
+training_folder/
+*.pt
+data/*
