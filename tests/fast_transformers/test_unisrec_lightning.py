@@ -5,14 +5,14 @@ import math
 import pytest
 import torch
 
-from rectools.fast_transformers.unisrec_lightning import (
+from rectools.fast_transformers.unisrec.lightning import (
     SUPPORTED_LOSSES,
     SUPPORTED_OPTIMIZERS,
     SUPPORTED_SCHEDULERS,
     UniSRecLightning,
     _cosine_warmup_scheduler,
 )
-from rectools.fast_transformers.unisrec_net import UniSRec
+from rectools.fast_transformers.unisrec.net import UniSRec
 
 
 @pytest.fixture()
@@ -41,7 +41,6 @@ def net(pretrained_emb: torch.Tensor) -> UniSRec:
 
 def _make_module(
     net: UniSRec,
-    use_id: bool = False,
     loss: str = "softmax",
     n_negatives: int | None = None,
     optimizer: str = "adamw",
@@ -57,7 +56,6 @@ def _make_module(
     return UniSRecLightning(
         net=net,
         param_groups=param_groups,
-        use_id=use_id,
         loss=loss,
         n_negatives=n_negatives,
         gbce_t=gbce_t,
@@ -224,19 +222,8 @@ class TestCosineWarmupScheduler:
 
 
 class TestTrainingStep:
-    def test_softmax_with_use_id_true(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True, loss="softmax")
-        batch = {
-            "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
-            "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
-        }
-        loss = module.training_step(batch, batch_idx=0)
-        assert loss.dim() == 0, "Loss should be a scalar"
-        assert not torch.isnan(loss), "Loss should not be NaN"
-        assert not torch.isinf(loss), "Loss should not be Inf"
-
-    def test_softmax_with_use_id_false(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=False, loss="softmax")
+    def test_softmax_returns_scalar(self, net: UniSRec) -> None:
+        module = _make_module(net, loss="softmax")
         batch = {
             "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
             "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
@@ -247,7 +234,7 @@ class TestTrainingStep:
         assert not torch.isinf(loss), "Loss should not be Inf"
 
     def test_softmax_positive_loss(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True, loss="softmax")
+        module = _make_module(net, loss="softmax")
         batch = {
             "x": torch.tensor([[1, 2, 3, 4, 5]]),
             "y": torch.tensor([[2, 3, 4, 5, 6]]),
@@ -257,7 +244,7 @@ class TestTrainingStep:
 
     def test_bce_loss_returns_scalar(self, net: UniSRec) -> None:
         n_negatives = 3
-        module = _make_module(net, use_id=True, loss="BCE", n_negatives=n_negatives)
+        module = _make_module(net, loss="BCE", n_negatives=n_negatives)
         batch = {
             "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
             "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
@@ -270,7 +257,7 @@ class TestTrainingStep:
 
     def test_gbce_loss_returns_scalar(self, net: UniSRec) -> None:
         n_negatives = 3
-        module = _make_module(net, use_id=True, loss="gBCE", n_negatives=n_negatives)
+        module = _make_module(net, loss="gBCE", n_negatives=n_negatives)
         batch = {
             "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
             "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
@@ -283,7 +270,7 @@ class TestTrainingStep:
 
     def test_sampled_softmax_loss_returns_scalar(self, net: UniSRec) -> None:
         n_negatives = 3
-        module = _make_module(net, use_id=True, loss="sampled_softmax", n_negatives=n_negatives)
+        module = _make_module(net, loss="sampled_softmax", n_negatives=n_negatives)
         batch = {
             "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
             "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
@@ -296,8 +283,8 @@ class TestTrainingStep:
 
     def test_softmax_ignores_negatives_when_present(self, net: UniSRec) -> None:
         """Softmax loss uses full softmax even when negatives are provided."""
-        module_no_neg = _make_module(net, use_id=True, loss="softmax")
-        module_with_neg = _make_module(net, use_id=True, loss="softmax")
+        module_no_neg = _make_module(net, loss="softmax")
+        module_with_neg = _make_module(net, loss="softmax")
         net.eval()
 
         batch_no_neg = {
@@ -316,7 +303,7 @@ class TestTrainingStep:
 
     def test_all_padding_softmax(self, net: UniSRec) -> None:
         """When all targets are padding, cross_entropy with ignore_index returns NaN."""
-        module = _make_module(net, use_id=True, loss="softmax")
+        module = _make_module(net, loss="softmax")
         batch = {
             "x": torch.tensor([[0, 0, 0, 0, 0]]),
             "y": torch.tensor([[0, 0, 0, 0, 0]]),
@@ -333,7 +320,7 @@ class TestTrainingStep:
 
 class TestValidationStep:
     def test_validation_returns_scalar(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True, loss="softmax")
+        module = _make_module(net, loss="softmax")
         module.eval()
         batch = {
             "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
@@ -347,7 +334,7 @@ class TestValidationStep:
 
     def test_validation_uses_last_hidden(self, net: UniSRec) -> None:
         """Validation slices hidden to [:, -1:, :], so y shape (B, 1) works."""
-        module = _make_module(net, use_id=False, loss="softmax")
+        module = _make_module(net, loss="softmax")
         module.eval()
         batch = {
             "x": torch.tensor([[0, 0, 1, 2, 3]]),
@@ -360,7 +347,7 @@ class TestValidationStep:
 
     def test_validation_with_negatives(self, net: UniSRec) -> None:
         n_negatives = 3
-        module = _make_module(net, use_id=True, loss="BCE", n_negatives=n_negatives)
+        module = _make_module(net, loss="BCE", n_negatives=n_negatives)
         module.eval()
         batch = {
             "x": torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]]),
@@ -380,7 +367,7 @@ class TestValidationStep:
 
 class TestCalcLossDispatch:
     def test_softmax_without_negatives_uses_full_softmax(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True, loss="softmax")
+        module = _make_module(net, loss="softmax")
         hidden = torch.randn(2, 5, 8)
         batch = {
             "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
@@ -390,7 +377,7 @@ class TestCalcLossDispatch:
         assert not torch.isnan(loss)
 
     def test_bce_without_negatives_raises(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True, loss="BCE")
+        module = _make_module(net, loss="BCE")
         hidden = torch.randn(2, 5, 8)
         batch = {
             "y": torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]]),
@@ -399,21 +386,21 @@ class TestCalcLossDispatch:
             module._calc_loss(hidden, batch)
 
     def test_gbce_without_negatives_raises(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True, loss="gBCE")
+        module = _make_module(net, loss="gBCE")
         hidden = torch.randn(2, 5, 8)
         batch = {"y": torch.tensor([[1, 2, 3, 4, 5]])}
         with pytest.raises(ValueError, match="requires negatives"):
             module._calc_loss(hidden, batch)
 
     def test_sampled_softmax_without_negatives_raises(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True, loss="sampled_softmax")
+        module = _make_module(net, loss="sampled_softmax")
         hidden = torch.randn(1, 5, 8)
         batch = {"y": torch.tensor([[1, 2, 3, 4, 5]])}
         with pytest.raises(ValueError, match="requires negatives"):
             module._calc_loss(hidden, batch)
 
     def test_unknown_loss_raises(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True, loss="mse")
+        module = _make_module(net, loss="mse")
         hidden = torch.randn(1, 5, 8)
         batch = {
             "y": torch.tensor([[1, 2, 3, 4, 5]]),
@@ -429,30 +416,19 @@ class TestCalcLossDispatch:
 
 
 class TestEmbeddingHelpers:
-    def test_get_item_embs_id_mode(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True)
+    def test_get_item_embs(self, net: UniSRec) -> None:
+        module = _make_module(net)
         item_ids = torch.tensor([[1, 2, 3]])
         embs = module._get_item_embs(item_ids)
         assert embs.shape == (1, 3, 8)  # (B, L, n_factors)
 
-    def test_get_item_embs_adapted_mode(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=False)
-        item_ids = torch.tensor([[1, 2, 3]])
-        embs = module._get_item_embs(item_ids)
-        assert embs.shape == (1, 3, 8)
-
-    def test_get_all_embs_id_mode(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True)
+    def test_get_all_embs(self, net: UniSRec) -> None:
+        module = _make_module(net)
         all_embs = module._get_all_embs()
         assert all_embs.shape == (11, 8)  # n_items + 1
 
-    def test_get_all_embs_adapted_mode(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=False)
-        all_embs = module._get_all_embs()
-        assert all_embs.shape == (11, 8)
-
     def test_get_pos_neg_logits_shape(self, net: UniSRec) -> None:
-        module = _make_module(net, use_id=True)
+        module = _make_module(net)
         hidden = torch.randn(2, 5, 8)
         labels = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
         negatives = torch.randint(1, 10, (2, 5, 3))
@@ -469,7 +445,6 @@ class TestInit:
     def test_stores_all_attributes(self, net: UniSRec) -> None:
         module = _make_module(
             net,
-            use_id=True,
             loss="BCE",
             n_negatives=5,
             optimizer="adam",
@@ -479,7 +454,6 @@ class TestInit:
             min_lr_ratio=0.05,
             gbce_t=0.3,
         )
-        assert module.use_id is True
         assert module.loss_name == "BCE"
         assert module.n_negatives == 5
         assert module.optimizer_name == "adam"

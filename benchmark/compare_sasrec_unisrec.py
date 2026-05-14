@@ -18,7 +18,7 @@ from tqdm import tqdm
 from rectools import Columns
 from rectools.dataset import Dataset
 from rectools.fast_transformers import UniSRecModel
-from rectools.fast_transformers.sequence_data import build_sequences
+from rectools.fast_transformers.preprocessing import build_sequences
 from rectools.models import SASRecModel
 
 DATA_DIR = Path("data/ml-20m")
@@ -78,13 +78,13 @@ def to_tensors(df):
 
 
 @torch.no_grad()
-def evaluate_unisrec(model, train_df, test_df, k=10, batch_size=256, use_id=False):
+def evaluate_unisrec(model, train_df, test_df, k=10, batch_size=256):
     net = model.net
     net.cuda().eval()
     device = torch.device("cuda")
     maxlen = net.session_max_len
 
-    item_embs = net.item_emb.weight if use_id else net.project_all()
+    item_embs = net.project_all()
     unique_items = model.item_id_mapping
     ext_to_int = {int(unique_items[i].item()): i + 1 for i in range(len(unique_items))}
 
@@ -107,7 +107,7 @@ def evaluate_unisrec(model, train_df, test_df, k=10, batch_size=256, use_id=Fals
         if not seqs:
             continue
         x = torch.tensor(seqs, dtype=torch.long, device=device)
-        h = net.encode_last(x, use_id=use_id)
+        h = net.encode_last(x)
         scores = h @ item_embs.T
         scores[:, 0] = float("-inf")
         for i, target_int in enumerate(targets):
@@ -430,7 +430,7 @@ def main():
     # Eval
     print("  Evaluating...")
     t0 = time.time()
-    unisrec_metrics = evaluate_unisrec(unisrec_id, train_with_val, test_ratings, use_id=True)
+    unisrec_metrics = evaluate_unisrec(unisrec_id, train_with_val, test_ratings)
     timings["unisrec_eval"] = time.time() - t0
     print(f"  Eval: {timings['unisrec_eval']:.1f}s")
     hr = unisrec_metrics["HR@10"]

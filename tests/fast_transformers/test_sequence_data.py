@@ -3,12 +3,10 @@
 import pytest
 import torch
 
-from rectools.fast_transformers.sequence_data import (
-    GPUBatchDataset,
+from rectools.fast_transformers.preprocessing.sequence_data import (
     SequenceBatchDataset,
     align_embeddings,
     build_sequences,
-    make_dataloader,
 )
 
 DEVICE = "cpu"
@@ -352,19 +350,19 @@ class TestAlignEmbeddings:
         assert aligned.shape == (4, 4)
 
 
-class TestGPUBatchDataset:
-    """Tests for GPUBatchDataset."""
+class TestSequenceBatchDataset:
+    """Tests for SequenceBatchDataset."""
 
     def test_length(self) -> None:
         x = torch.zeros(5, 3)
         y = torch.zeros(5, 3)
-        ds = GPUBatchDataset(x, y)
+        ds = SequenceBatchDataset(x, y)
         assert len(ds) == 5
 
     def test_getitem_returns_dict(self) -> None:
         x = torch.tensor([[1, 2, 3], [4, 5, 6]])
         y = torch.tensor([[7, 8, 9], [10, 11, 12]])
-        ds = GPUBatchDataset(x, y)
+        ds = SequenceBatchDataset(x, y)
 
         batch = ds[0]
         assert isinstance(batch, dict)
@@ -376,7 +374,7 @@ class TestGPUBatchDataset:
     def test_getitem_second_element(self) -> None:
         x = torch.tensor([[1, 2], [3, 4]])
         y = torch.tensor([[5, 6], [7, 8]])
-        ds = GPUBatchDataset(x, y)
+        ds = SequenceBatchDataset(x, y)
 
         batch = ds[1]
         assert batch["x"].tolist() == [3, 4]
@@ -390,7 +388,7 @@ class TestGPUBatchDataset:
             batch["x"] = batch["x"] * 2
             return batch
 
-        ds = GPUBatchDataset(x, y, transform=double_x)
+        ds = SequenceBatchDataset(x, y, transform=double_x)
         batch = ds[0]
         assert batch["x"].tolist() == [2, 4]
         assert batch["y"].tolist() == [3, 4]
@@ -398,64 +396,10 @@ class TestGPUBatchDataset:
     def test_no_transform(self) -> None:
         x = torch.tensor([[10, 20]])
         y = torch.tensor([[30, 40]])
-        ds = GPUBatchDataset(x, y, transform=None)
+        ds = SequenceBatchDataset(x, y, transform=None)
 
         batch = ds[0]
         assert batch["x"].tolist() == [10, 20]
         assert batch["y"].tolist() == [30, 40]
-
-
-class TestMakeDataloader:
-    """Tests for make_dataloader."""
-
-    def test_returns_dataloader(self) -> None:
-        x = torch.zeros(10, 3)
-        y = torch.zeros(10, 3)
-        dl = make_dataloader(x, y, batch_size=4, shuffle=False)
-        assert isinstance(dl, torch.utils.data.DataLoader)
-
-    def test_batch_size(self) -> None:
-        x = torch.zeros(10, 3)
-        y = torch.zeros(10, 3)
-        dl = make_dataloader(x, y, batch_size=4, shuffle=False)
-
-        batches = list(dl)
-        # 10 samples, batch_size 4 => 3 batches: 4, 4, 2
-        assert len(batches) == 3
-        assert batches[0]["x"].shape[0] == 4
-        assert batches[2]["x"].shape[0] == 2
-
-    def test_batch_content(self) -> None:
-        x = torch.tensor([[1, 2], [3, 4], [5, 6]])
-        y = torch.tensor([[7, 8], [9, 10], [11, 12]])
-        dl = make_dataloader(x, y, batch_size=3, shuffle=False)
-
-        batch = next(iter(dl))
-        assert batch["x"].shape == (3, 2)
-        assert batch["y"].shape == (3, 2)
-        torch.testing.assert_close(batch["x"], x)
-        torch.testing.assert_close(batch["y"], y)
-
-    def test_transform_in_dataloader(self) -> None:
-        x = torch.tensor([[1, 2], [3, 4]])
-        y = torch.tensor([[5, 6], [7, 8]])
-
-        def add_key(batch: dict) -> dict:
-            batch["mask"] = (batch["x"] > 0).long()
-            return batch
-
-        dl = make_dataloader(x, y, batch_size=2, shuffle=False, transform=add_key)
-        batch = next(iter(dl))
-        assert "mask" in batch
-        assert batch["mask"].tolist() == [[1, 1], [1, 1]]
-
-    def test_single_sample_batch(self) -> None:
-        x = torch.tensor([[1, 2, 3]])
-        y = torch.tensor([[4, 5, 6]])
-        dl = make_dataloader(x, y, batch_size=1, shuffle=False)
-
-        batch = next(iter(dl))
-        assert batch["x"].shape == (1, 3)
-        assert batch["y"].shape == (1, 3)
 
 

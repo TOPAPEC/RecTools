@@ -1,27 +1,27 @@
 """Fast Transformers: flat sequential recommenders without ItemNet hierarchy."""
 
+from .metrics import compute_metrics, hitrate_at_k, mrr_at_k, ndcg_at_k
 from .net import FlatSASRec, SASRecBlock
-from .sequence_data import (
-    GPUBatchDataset,
+from .preprocessing import (
     SequenceBatchDataset,
     align_embeddings,
     build_sequences,
-    make_dataloader,
 )
-from .unisrec_lightning import UniSRecLightning
-from .unisrec_model import UniSRecModel
-from .unisrec_net import FeedForward, UniSRec
+from .unisrec import UniSRec, UniSRecLightning, UniSRecModel
+from .unisrec.net import FeedForward
 
 __all__ = [
     "build_sequences",
     "align_embeddings",
     "SequenceBatchDataset",
-    "GPUBatchDataset",
-    "make_dataloader",
     "FlatSASRec",
     "SASRecBlock",
     "UniSRec",
     "FeedForward",
     "UniSRecLightning",
     "UniSRecModel",
+    "hitrate_at_k",
+    "ndcg_at_k",
+    "mrr_at_k",
+    "compute_metrics",
 ]

@@ -7,7 +7,6 @@ On GPU this gives ~30x speedup over pandas-based preprocessing on ML-20M.
 import typing as tp
 
 import torch
-from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
 
@@ -171,41 +170,3 @@ class SequenceBatchDataset(TorchDataset):
         if self.transform:
             batch = self.transform(batch)
         return batch
-
-
-# Keep old name as alias for backwards compatibility
-GPUBatchDataset = SequenceBatchDataset
-
-
-def make_dataloader(
-    x: torch.Tensor,
-    y: torch.Tensor,
-    batch_size: int,
-    shuffle: bool = True,
-    transform: tp.Optional[tp.Callable] = None,
-    num_workers: int = 0,
-    **kwargs: tp.Any,
-) -> DataLoader:
-    """Create a DataLoader from prebuilt sequence tensors.
-
-    Parameters
-    ----------
-    x, y : Tensor
-        Input and target sequences from :func:`build_sequences`.
-    batch_size : int
-        Batch size.
-    shuffle : bool, default True
-        Whether to shuffle.
-    transform : callable, optional
-        Per-sample transform (e.g. negative sampling).
-    num_workers : int, default 0
-        Number of DataLoader workers.
-    **kwargs
-        Additional keyword arguments passed to :class:`~torch.utils.data.DataLoader`.
-
-    Returns
-    -------
-    DataLoader
-    """
-    ds = SequenceBatchDataset(x, y, transform=transform)
-    return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, **kwargs)

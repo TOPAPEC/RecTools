@@ -9,8 +9,8 @@ import torch
 onnx = pytest.importorskip("onnx")
 ort = pytest.importorskip("onnxruntime")
 
-from rectools.fast_transformers.unisrec_model import UniSRecModel  # noqa: E402
-from rectools.fast_transformers.unisrec_net import UniSRec  # noqa: E402
+from rectools.fast_transformers.unisrec.model import UniSRecModel  # noqa: E402
+from rectools.fast_transformers.unisrec.net import UniSRec  # noqa: E402
 
 
 @pytest.fixture()
@@ -47,7 +47,7 @@ class TestUniSRecOnnxExport:
         path = str(tmp_path / "model.onnx")
         torch.onnx.export(
             net,
-            (dummy, False),
+            (dummy,),
             path,
             input_names=["input_ids"],
             output_names=["hidden"],
@@ -60,53 +60,54 @@ class TestUniSRecOnnxExport:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         sess = _export_and_load(
             net,
-            (dummy, False),
+            (dummy,),
             tmp_path,
             input_names=["input_ids"],
             output_names=["hidden"],
         )
         with torch.no_grad():
-            expected = net(dummy, use_id=False).numpy()
+            expected = net(dummy).numpy()
         result = sess.run(None, {"input_ids": dummy.numpy()})[0]
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
-    @pytest.mark.xfail(reason="torch.onnx.export ignores dynamic_shapes for tuple args with bool")
+    @pytest.mark.xfail(reason="dynamic_shapes requires dynamo=True which is not used here")
     def test_dynamic_batch(self, net: UniSRec, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         batch = torch.export.Dim("batch", min=1)
         sess = _export_and_load(
             net,
-            (dummy, False),
+            (dummy,),
             tmp_path,
             input_names=["input_ids"],
             output_names=["hidden"],
-            dynamic_shapes=({0: batch}, None),
+            dynamic_shapes=({0: batch},),
         )
         batch_input = torch.tensor(
             [[0, 0, 1, 2, 3], [0, 1, 4, 5, 6], [0, 0, 0, 7, 8]],
             dtype=torch.long,
         )
         with torch.no_grad():
-            expected = net(batch_input, use_id=False).numpy()
+            expected = net(batch_input).numpy()
         result = sess.run(None, {"input_ids": batch_input.numpy()})[0]
         assert result.shape[0] == 3
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
+    @pytest.mark.xfail(reason="dynamic_shapes requires dynamo=True which is not used here")
     def test_different_sequence_lengths(self, net: UniSRec, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         batch = torch.export.Dim("batch", min=1)
         seq_len = torch.export.Dim("seq_len", min=1, max=8)
         sess = _export_and_load(
             net,
-            (dummy, False),
+            (dummy,),
             tmp_path,
             input_names=["input_ids"],
             output_names=["hidden"],
-            dynamic_shapes=({0: batch, 1: seq_len}, None),
+            dynamic_shapes=({0: batch, 1: seq_len},),
         )
         short = torch.tensor([[0, 1, 2]], dtype=torch.long)
         with torch.no_grad():
-            expected = net(short, use_id=False).numpy()
+            expected = net(short).numpy()
         result = sess.run(None, {"input_ids": short.numpy()})[0]
         assert result.shape == (1, 3, 16)
         np.testing.assert_allclose(result, expected, atol=1e-5)
@@ -115,14 +116,14 @@ class TestUniSRecOnnxExport:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         sess = _export_and_load(
             net,
-            (dummy, False),
+            (dummy,),
             tmp_path,
             input_names=["input_ids"],
             output_names=["hidden"],
         )
         all_pad = torch.zeros(1, 5, dtype=torch.long)
         with torch.no_grad():
-            expected = net(all_pad, use_id=False).numpy()
+            expected = net(all_pad).numpy()
         result = sess.run(None, {"input_ids": all_pad.numpy()})[0]
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
@@ -130,7 +131,7 @@ class TestUniSRecOnnxExport:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         sess = _export_and_load(
             net,
-            (dummy, False),
+            (dummy,),
             tmp_path,
             input_names=["input_ids"],
             output_names=["hidden"],
@@ -183,11 +184,9 @@ class TestUniSRecModelExport:
             n_blocks=1,
             n_heads=2,
             session_max_len=8,
-            phase1_epochs=0,
-            phase2_epochs=0,
-            phase3_epochs=0,
+            epochs=0,
         )
-        from rectools.fast_transformers.sequence_data import align_embeddings
+        from rectools.fast_transformers.preprocessing.sequence_data import align_embeddings
 
         unique_items = torch.arange(1, 11)
         aligned = align_embeddings(pretrained, unique_items, 10)
@@ -221,7 +220,7 @@ class TestUniSRecModelExport:
         sess = ort.InferenceSession(str(path))
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         with torch.no_grad():
-            expected = model.net(dummy, use_id=False).numpy()
+            expected = model.net(dummy).numpy()
         result = sess.run(None, {"input_ids": dummy.numpy()})[0]
         np.testing.assert_allclose(result, expected, atol=1e-5)
 

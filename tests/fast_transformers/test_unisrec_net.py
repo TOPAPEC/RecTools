@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from rectools.fast_transformers.unisrec_net import UniSRec
+from rectools.fast_transformers.unisrec.net import UniSRec
 
 
 @pytest.fixture()
@@ -31,27 +31,19 @@ def net(pretrained_emb: torch.Tensor) -> UniSRec:
 
 
 class TestUniSRecShapes:
-    def test_forward_id_shape(self, net: UniSRec) -> None:
+    def test_forward_shape(self, net: UniSRec) -> None:
         x = torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]])
-        h = net(x, use_id=True)
-        assert h.shape == (2, 5, 16)
-
-    def test_forward_adapted_shape(self, net: UniSRec) -> None:
-        x = torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]])
-        h = net(x, use_id=False)
+        h = net(x)
         assert h.shape == (2, 5, 16)
 
     def test_encode_last_shape(self, net: UniSRec) -> None:
         x = torch.tensor([[0, 0, 1, 2, 3]])
-        emb = net.encode_last(x, use_id=False)
+        emb = net.encode_last(x)
         assert emb.shape == (1, 16)
 
     def test_project_all_shape(self, net: UniSRec) -> None:
         proj = net.project_all()
         assert proj.shape == (31, 16)  # n_items + 1 (with padding)
-
-    def test_item_emb_shape(self, net: UniSRec) -> None:
-        assert net.item_emb.weight.shape == (31, 16)
 
 
 class TestUniSRecAdaptor:
@@ -85,23 +77,8 @@ class TestUniSRecAdaptor:
         )
         assert net.n_variants == 3
         x = torch.tensor([[0, 0, 1, 2, 3]])
-        h = net(x, use_id=False)
+        h = net(x)
         assert h.shape == (1, 5, 16)
-
-
-class TestFreezeUnfreeze:
-    def test_freeze_transformer(self, net: UniSRec) -> None:
-        net.freeze_transformer()
-        for p in net.transformer_params:
-            assert not p.requires_grad
-        for p in net.adaptor_params:
-            assert p.requires_grad
-
-    def test_unfreeze_transformer(self, net: UniSRec) -> None:
-        net.freeze_transformer()
-        net.unfreeze_transformer()
-        for p in net.transformer_params:
-            assert p.requires_grad
 
 
 class TestPaddingInvariance:
@@ -111,6 +88,6 @@ class TestPaddingInvariance:
         x_a = torch.tensor([[0, 0, 0, 5, 10]])
         x_b = torch.tensor([[0, 0, 0, 5, 10]])
         with torch.no_grad():
-            e_a = net.encode_last(x_a, use_id=False)
-            e_b = net.encode_last(x_b, use_id=False)
+            e_a = net.encode_last(x_a)
+            e_b = net.encode_last(x_b)
         torch.testing.assert_close(e_a, e_b)

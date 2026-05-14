@@ -1,7 +1,5 @@
 """UniSRec network: SASRec encoder with pretrained text embeddings and learnable adaptor."""
 
-import typing as tp
-
 import torch
 from torch import nn
 
@@ -71,9 +69,13 @@ class UniSRec(nn.Module):
     """
     UniSRec: sequential recommender with pretrained text embeddings + adaptor.
 
-    Architecture:
+    Architecture::
+
         frozen_emb  -->  adaptor (PCA/BN + optional MLP)  -->  SASRec encoder
-        item_emb    -->  SASRec encoder  (Phase 1, ID-based)
+
+    The adaptor projects frozen pretrained embeddings (e.g. from a
+    sentence-transformer) into the transformer hidden space.  All training
+    is joint — adaptor and transformer are trained together in a single phase.
 
     Parameters
     ----------
@@ -134,9 +136,6 @@ class UniSRec(nn.Module):
 
         if not use_adaptor_ffn and adaptor_type != "pca":
             raise ValueError("use_adaptor_ffn=False is only supported with adaptor_type='pca'")
-
-        # ── ID embedding (Phase 1) ──
-        self.item_emb = nn.Embedding(n_items + 1, n_factors, padding_idx=self.PADDING_IDX)
 
         # ── Frozen pretrained embeddings ──
         if pretrained_embeddings.ndim == 2:
@@ -238,36 +237,6 @@ class UniSRec(nn.Module):
         """
         return self._adapt_score(self.frozen_emb[:, 0])
 
-    # ── Param-group helpers for multi-phase training ──
-
-    @property
-    def transformer_params(self) -> tp.List[nn.Parameter]:
-        modules = (
-            list(self.attention_layernorms)
-            + list(self.attention_layers)
-            + list(self.forward_layernorms)
-            + list(self.forward_layers)
-            + [self.last_layernorm, self.pos_emb]
-        )
-        return [p for m in modules for p in m.parameters()]
-
-    @property
-    def adaptor_params(self) -> tp.List[nn.Parameter]:
-        params: tp.List[nn.Parameter] = list(self.head.parameters()) if self.head is not None else []
-        if self.adaptor_type == "pca":
-            params += [self.whitening_proj, self.whitening_bias]
-        else:
-            params += list(self.bn_input.parameters()) + list(self.bn_score.parameters())
-        return params
-
-    def freeze_transformer(self) -> None:
-        for p in self.transformer_params:
-            p.requires_grad = False
-
-    def unfreeze_transformer(self) -> None:
-        for p in self.transformer_params:
-            p.requires_grad = True
-
     # ── Encoder ──
 
     def _causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
@@ -307,29 +276,23 @@ class UniSRec(nn.Module):
 
     # ── Public forward / encode ──
 
-    def forward(self, input_ids: torch.Tensor, use_id: bool = False) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         """
-        Encode a sequence of item IDs.
+        Encode a sequence of item IDs through the adaptor + transformer.
 
         Parameters
         ----------
         input_ids : LongTensor (B, L)
             Left-padded item ID sequences (0 = padding).
-        use_id : bool
-            If True use the trainable ``item_emb`` (Phase 1).
-            If False use the adapted pretrained embeddings (Phase 2/3).
 
         Returns
         -------
         Tensor (B, L, n_factors)
         """
-        if use_id:
-            seqs = self.item_emb(input_ids)
-        else:
-            seqs = self._adapt_input(self._sample_frozen(input_ids))
+        seqs = self._adapt_input(self._sample_frozen(input_ids))
         return self._encode(seqs, input_ids)
 
-    def encode_last(self, input_ids: torch.Tensor, use_id: bool = False) -> torch.Tensor:
+    def encode_last(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Encode and return the last-position representation (B, D)."""
-        h = self.forward(input_ids, use_id=use_id)  # (B, L, D)
+        h = self.forward(input_ids)  # (B, L, D)
         return h[:, -1, :]  # left-padded → last position is always the rightmost

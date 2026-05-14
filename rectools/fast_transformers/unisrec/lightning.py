@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 
-from .unisrec_net import UniSRec
+from .net import UniSRec
 
 SUPPORTED_LOSSES = ("softmax", "BCE", "gBCE", "sampled_softmax")
 SUPPORTED_OPTIMIZERS = ("adam", "adamw")
@@ -17,17 +17,16 @@ SUPPORTED_SCHEDULERS = (None, "cosine_warmup")
 
 class UniSRecLightning(pl.LightningModule):
     """
-    Thin Lightning wrapper reused across all training phases.
+    Thin Lightning wrapper for joint UniSRec training.
 
-    Each phase creates a fresh ``UniSRecLightning`` with appropriate
-    ``param_groups`` and ``use_id`` flag, sharing the same ``net`` instance.
+    Wraps a :class:`UniSRec` network with configurable loss, optimizer,
+    and learning-rate scheduler.
     """
 
     def __init__(
         self,
         net: UniSRec,
         param_groups: tp.List[tp.Dict[str, tp.Any]],
-        use_id: bool = False,
         loss: str = "softmax",
         n_negatives: tp.Optional[int] = None,
         gbce_t: float = 0.2,
@@ -40,7 +39,6 @@ class UniSRecLightning(pl.LightningModule):
         super().__init__()
         self.net = net
         self._param_groups = param_groups
-        self.use_id = use_id
         self.loss_name = loss
         self.n_negatives = n_negatives
         self.gbce_t = gbce_t
@@ -53,13 +51,9 @@ class UniSRecLightning(pl.LightningModule):
     # ── helpers ──
 
     def _get_item_embs(self, item_ids: torch.Tensor) -> torch.Tensor:
-        if self.use_id:
-            return self.net.item_emb(item_ids)
         return self.net._adapt_score(self.net._sample_frozen(item_ids))
 
     def _get_all_embs(self) -> torch.Tensor:
-        if self.use_id:
-            return self.net.item_emb.weight
         return self.net.project_all()
 
     def _get_pos_neg_logits(
@@ -90,11 +84,7 @@ class UniSRecLightning(pl.LightningModule):
         labels = batch["y"]
         has_neg = "negatives" in batch
 
-        if self.loss_name == "softmax" and not has_neg:
-            return self._full_softmax_loss(hidden, labels)
-
-        if self.loss_name == "softmax" and has_neg:
-            # full softmax even if negatives are available
+        if self.loss_name == "softmax":
             return self._full_softmax_loss(hidden, labels)
 
         if not has_neg:
@@ -165,13 +155,13 @@ class UniSRecLightning(pl.LightningModule):
     # ── training / validation ──
 
     def training_step(self, batch: tp.Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        hidden = self.net(batch["x"], use_id=self.use_id)
+        hidden = self.net(batch["x"])
         loss = self._calc_loss(hidden, batch)
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch: tp.Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        hidden = self.net(batch["x"], use_id=self.use_id)
+        hidden = self.net(batch["x"])
         # Validation batch has y of shape (B, 1) -- take last hidden position only
         hidden = hidden[:, -1:, :]
         loss = self._calc_loss(hidden, batch)

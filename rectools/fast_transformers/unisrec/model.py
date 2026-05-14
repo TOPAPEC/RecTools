@@ -7,9 +7,11 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping
 
-from .sequence_data import align_embeddings, build_sequences, make_dataloader
-from .unisrec_lightning import SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS, UniSRecLightning
-from .unisrec_net import UniSRec
+from torch.utils.data import DataLoader
+
+from ..preprocessing import SequenceBatchDataset, align_embeddings, build_sequences
+from .lightning import SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS, UniSRecLightning
+from .net import UniSRec
 
 
 class _ProjectAllWrapper(torch.nn.Module):
@@ -151,7 +153,6 @@ class UniSRecModel:
         return UniSRecLightning(
             net=net,
             param_groups=param_groups,
-            use_id=False,
             loss=self.loss,
             n_negatives=self.n_negatives,
             gbce_t=self.gbce_t,
@@ -264,15 +265,17 @@ class UniSRecModel:
             ffn_expansion=self.ffn_expansion,
         )
 
-        train_dl = make_dataloader(
-            x, y, batch_size=self.batch_size, shuffle=True, num_workers=self.dataloader_num_workers,
+        train_dl = DataLoader(
+            SequenceBatchDataset(x, y),
+            batch_size=self.batch_size, shuffle=True, num_workers=self.dataloader_num_workers,
         )
 
         val_dl = None
         if self.patience is not None:
             val_y_last = y[:, -1:]
-            val_dl = make_dataloader(
-                x, val_y_last, batch_size=self.batch_size, shuffle=False, num_workers=self.dataloader_num_workers,
+            val_dl = DataLoader(
+                SequenceBatchDataset(x, val_y_last),
+                batch_size=self.batch_size, shuffle=False, num_workers=self.dataloader_num_workers,
             )
 
         lm = self._make_lightning(net, self._param_groups(net), self.epochs, train_dl)
@@ -353,7 +356,7 @@ class UniSRecModel:
 
         torch.onnx.export(
             net,
-            (dummy, False),
+            (dummy,),
             str(encoder_path),
             input_names=["input_ids"],
             output_names=["hidden"],
@@ -396,6 +399,68 @@ class UniSRecModel:
         result = torch.zeros_like(external_ids, dtype=torch.long)
         result[found] = sort_idx[pos[found]] + 1
         return result
+
+    def recommend(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        """Not supported. Use :meth:`predict_topk` instead.
+
+        ``UniSRecModel`` operates on raw tensor sequences, not on
+        ``Dataset`` / user IDs expected by ``ModelBase.recommend()``.
+        Keeping the same name with a different signature would silently
+        break code that relies on the RecTools ``recommend`` contract.
+        """
+        raise NotImplementedError(
+            "UniSRecModel does not implement recommend(). "
+            "Use predict_topk(input_ids, k) instead — it accepts "
+            "left-padded internal ID sequences and returns (scores, item_ids) tensors."
+        )
+
+    @torch.no_grad()
+    def predict_topk(
+        self,
+        input_ids: torch.Tensor,
+        k: int = 10,
+    ) -> tp.Tuple[torch.Tensor, torch.Tensor]:
+        """Encode user sequences and return top-k items in a single GPU pass.
+
+        This is the inference entry point for ``UniSRecModel``.  It fuses
+        sequence encoding and dot-product ranking into one call, keeping
+        everything on GPU without intermediate numpy / scipy conversions.
+
+        Compared to the ``TorchRanker.rank()`` path used by RecTools models:
+
+        * Item embeddings (``project_all()``) are computed once and stay on
+          device, instead of being transferred to GPU on every batch.
+        * There is no encode → cpu → numpy → cuda → score → cpu → numpy
+          roundtrip — the encoder output feeds directly into scoring.
+
+        Parameters
+        ----------
+        input_ids : LongTensor (B, L)
+            Left-padded internal item ID sequences (0 = padding).
+            Use :meth:`map_item_ids` to convert external IDs to internal.
+        k : int
+            Number of items to return per user.
+
+        Returns
+        -------
+        scores : Tensor (B, k)
+            Dot-product scores, descending.
+        item_ids : LongTensor (B, k)
+            Internal item IDs (1-based).
+        """
+        assert self._net is not None, "Model not fitted or loaded"
+        net = self._net
+        was_training = net.training
+        net.eval()
+        device = next(net.parameters()).device
+        h = net.encode_last(input_ids.to(device))
+        item_embs = net.project_all()
+        scores = h @ item_embs.T
+        scores[:, 0] = float("-inf")
+        top_scores, top_ids = scores.topk(k, dim=1)
+        if was_training:
+            net.train()
+        return top_scores, top_ids
 
     @property
     def net(self) -> UniSRec:

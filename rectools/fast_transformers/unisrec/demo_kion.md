@@ -206,7 +206,7 @@ with torch.no_grad():
         if not seqs:
             continue
         x = torch.tensor(seqs, dtype=torch.long, device=device)
-        h = net.encode_last(x, use_id=False)
+        h = net.encode_last(x)
         scores = h @ item_embs.T
         scores[:, 0] = float("-inf")
         for i, target_int in enumerate(targets):
