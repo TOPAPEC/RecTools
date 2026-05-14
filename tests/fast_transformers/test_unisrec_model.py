@@ -4,7 +4,6 @@ import pytest
 import torch
 
 from rectools.fast_transformers import UniSRecModel
-from rectools.fast_transformers.gpu_data import hash_item_ids
 
 
 def _make_embeddings(n_items: int = 25, dim: int = 64) -> torch.Tensor:
@@ -40,9 +39,7 @@ def _make_model(**kwargs) -> UniSRecModel:
         n_blocks=1,
         n_heads=2,
         session_max_len=8,
-        phase1_epochs=1,
-        phase2_epochs=1,
-        phase3_epochs=1,
+        epochs=1,
         batch_size=16,
         verbose=0,
     )
@@ -85,36 +82,10 @@ class TestFit:
             _ = model.net
 
 
-class TestPhaseSkipping:
-    def test_skip_phase1(self) -> None:
-        user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase1_epochs=0)
-        model.fit(user_ids, item_ids, timestamps)
-        assert model.is_fitted
-
-    def test_skip_phase2(self) -> None:
-        user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase2_epochs=0)
-        model.fit(user_ids, item_ids, timestamps)
-        assert model.is_fitted
-
-    def test_only_phase1(self) -> None:
-        user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase1_epochs=2, phase2_epochs=0, phase3_epochs=0)
-        model.fit(user_ids, item_ids, timestamps)
-        assert model.is_fitted
-
-    def test_only_phase3(self) -> None:
-        user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase1_epochs=0, phase2_epochs=0, phase3_epochs=2)
-        model.fit(user_ids, item_ids, timestamps)
-        assert model.is_fitted
-
-
 class TestLosses:
     def test_softmax_loss(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(loss="softmax", phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model = _make_model(loss="softmax", epochs=1)
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
@@ -126,13 +97,13 @@ class TestLosses:
 class TestOptimizer:
     def test_adam(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(optimizer="adam", phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model = _make_model(optimizer="adam", epochs=1)
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
     def test_adamw(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(optimizer="adamw", phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model = _make_model(optimizer="adamw", epochs=1)
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
@@ -144,9 +115,7 @@ class TestOptimizer:
 class TestScheduler:
     def test_cosine_warmup(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(
-            scheduler="cosine_warmup", warmup_ratio=0.1, phase1_epochs=0, phase2_epochs=0, phase3_epochs=2
-        )
+        model = _make_model(scheduler="cosine_warmup", warmup_ratio=0.1, epochs=2)
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
@@ -158,13 +127,13 @@ class TestScheduler:
 class TestCheckpoint:
     def test_save_load_roundtrip(self, tmp_path) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0)
+        model = _make_model(epochs=1)
         model.fit(user_ids, item_ids, timestamps)
 
         ckpt_path = tmp_path / "model.pt"
         model.save_checkpoint(ckpt_path)
 
-        model2 = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0)
+        model2 = _make_model(epochs=1)
         model2.load_checkpoint(ckpt_path, device="cpu")
         assert model2.is_fitted
 
@@ -177,7 +146,7 @@ class TestFFNTypes:
     @pytest.mark.parametrize("ffn_type", ["conv1d", "linear_gelu", "linear_relu"])
     def test_ffn_type(self, ffn_type: str) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(ffn_type=ffn_type, ffn_expansion=2, phase1_epochs=0, phase2_epochs=0, phase3_epochs=1)
+        model = _make_model(ffn_type=ffn_type, ffn_expansion=2, epochs=1)
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
@@ -185,7 +154,7 @@ class TestFFNTypes:
 class TestEarlyStopping:
     def test_patience(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(patience=2, phase1_epochs=0, phase2_epochs=0, phase3_epochs=5)
+        model = _make_model(patience=2, epochs=5)
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
@@ -193,7 +162,7 @@ class TestEarlyStopping:
 class TestMapItemIds:
     def test_dense_known_items(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0)
+        model = _make_model(epochs=1)
         model.fit(user_ids, item_ids, timestamps)
         unique = model.item_id_mapping
         result = model.map_item_ids(unique)
@@ -202,25 +171,7 @@ class TestMapItemIds:
 
     def test_dense_unknown_items(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0)
-        model.fit(user_ids, item_ids, timestamps)
-        unknown = torch.tensor([9999, 8888], dtype=torch.long)
-        result = model.map_item_ids(unknown)
-        assert result.tolist() == [0, 0]
-
-    def test_hash_known_items(self) -> None:
-        user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0, id_mapping="hash")
-        model.fit(user_ids, item_ids, timestamps)
-        unique = model.item_id_mapping
-        n_items = len(unique)
-        result = model.map_item_ids(unique)
-        expected = hash_item_ids(unique, n_items)
-        assert result.tolist() == expected.tolist()
-
-    def test_hash_unknown_items(self) -> None:
-        user_ids, item_ids, timestamps = _make_interactions()
-        model = _make_model(phase1_epochs=1, phase2_epochs=0, phase3_epochs=0, id_mapping="hash")
+        model = _make_model(epochs=1)
         model.fit(user_ids, item_ids, timestamps)
         unknown = torch.tensor([9999, 8888], dtype=torch.long)
         result = model.map_item_ids(unknown)

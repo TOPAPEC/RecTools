@@ -1,4 +1,4 @@
-"""UniSRecModel: standalone model with configurable three-phase training."""
+"""UniSRecModel: standalone sequential recommender with pretrained text embeddings."""
 
 import typing as tp
 from pathlib import Path
@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping
 
-from .gpu_data import align_embeddings, build_sequences, hash_item_ids, make_dataloader
+from .sequence_data import align_embeddings, build_sequences, make_dataloader
 from .unisrec_lightning import SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS, UniSRecLightning
 from .unisrec_net import UniSRec
 
@@ -25,11 +25,8 @@ class UniSRecModel:
     """
     UniSRec sequential recommender with pretrained text embeddings.
 
-    Three training phases
-    ---------------------
-    1. **Phase 1** - SASRec on ID embeddings (``item_emb`` + transformer).
-    2. **Phase 2** - Adaptor only (transformer frozen, pretrained embeddings).
-    3. **Phase 3** - Full fine-tune (adaptor + transformer, pretrained embeddings).
+    Joint training of the adaptor and transformer encoder on
+    frozen pretrained embeddings (e.g. from a sentence-transformer).
 
     Parameters
     ----------
@@ -55,13 +52,9 @@ class UniSRecModel:
         use_adaptor_ffn: bool = True,
         ffn_type: str = "conv1d",
         ffn_expansion: int = 1,
-        # training phases
-        phase1_epochs: int = 10,
-        phase2_epochs: int = 10,
-        phase3_epochs: int = 10,
-        phase1_lr: float = 1e-3,
-        phase2_lr: float = 3e-4,
-        phase3_lr: float = 1e-4,
+        # training
+        epochs: int = 10,
+        lr: float = 1e-4,
         lr_head: float = 0.3,
         lr_wp: float = 0.1,
         lr_transformer: float = 3.0,
@@ -82,7 +75,6 @@ class UniSRecModel:
         batch_size: int = 128,
         dataloader_num_workers: int = 0,
         train_min_user_interactions: int = 2,
-        id_mapping: str = "dense",
         verbose: int = 0,
     ) -> None:
         if loss not in SUPPORTED_LOSSES:
@@ -106,12 +98,8 @@ class UniSRecModel:
         self.use_adaptor_ffn = use_adaptor_ffn
         self.ffn_type = ffn_type
         self.ffn_expansion = ffn_expansion
-        self.phase1_epochs = phase1_epochs
-        self.phase2_epochs = phase2_epochs
-        self.phase3_epochs = phase3_epochs
-        self.phase1_lr = phase1_lr
-        self.phase2_lr = phase2_lr
-        self.phase3_lr = phase3_lr
+        self.epochs = epochs
+        self.lr = lr
         self.lr_head = lr_head
         self.lr_wp = lr_wp
         self.lr_transformer = lr_transformer
@@ -128,7 +116,6 @@ class UniSRecModel:
         self.batch_size = batch_size
         self.dataloader_num_workers = dataloader_num_workers
         self.train_min_user_interactions = train_min_user_interactions
-        self.id_mapping = id_mapping
         self.verbose = verbose
 
         self._net: tp.Optional[UniSRec] = None
@@ -157,7 +144,6 @@ class UniSRecModel:
         self,
         net: UniSRec,
         param_groups: tp.List[tp.Dict],
-        use_id: bool,
         max_epochs: int,
         train_dl: tp.Any,
     ) -> UniSRecLightning:
@@ -165,7 +151,7 @@ class UniSRecModel:
         return UniSRecLightning(
             net=net,
             param_groups=param_groups,
-            use_id=use_id,
+            use_id=False,
             loss=self.loss,
             n_negatives=self.n_negatives,
             gbce_t=self.gbce_t,
@@ -176,65 +162,36 @@ class UniSRecModel:
             total_steps=total_steps,
         )
 
-    # ── Phase param-groups ──
+    # ── param groups ──
 
-    def _phase1_params(self, net: UniSRec) -> tp.List[tp.Dict[str, tp.Any]]:
-        return [{"params": list(net.item_emb.parameters()) + net.transformer_params, "lr": self.phase1_lr}]
-
-    def _phase2_params(self, net: UniSRec) -> tp.List[tp.Dict[str, tp.Any]]:
-        if self.adaptor_type == "pca":
-            groups: tp.List[tp.Dict[str, tp.Any]] = [
-                {"params": [net.whitening_proj], "lr": self.phase2_lr * self.lr_wp, "weight_decay": 0.0},
-                {"params": [net.whitening_bias], "lr": self.phase2_lr * 10.0, "weight_decay": 0.0},
-            ]
-            if net.head is not None:
-                groups.append(
-                    {
-                        "params": list(net.head.parameters()),
-                        "lr": self.phase2_lr * self.lr_head,
-                        "weight_decay": self.weight_decay,
-                    }
-                )
-        else:
-            groups = [
-                {"params": list(net.bn_input.parameters()), "lr": self.phase2_lr, "weight_decay": 0.0},
-                {"params": list(net.bn_score.parameters()), "lr": self.phase2_lr, "weight_decay": 0.0},
-                {
-                    "params": list(net.head.parameters()),
-                    "lr": self.phase2_lr * self.lr_head,
-                    "weight_decay": self.weight_decay,
-                },
-            ]
-        return groups
-
-    def _phase3_params(self, net: UniSRec) -> tp.List[tp.Dict[str, tp.Any]]:
+    def _param_groups(self, net: UniSRec) -> tp.List[tp.Dict[str, tp.Any]]:
         if self.adaptor_type == "pca":
             adaptor: tp.List[tp.Dict[str, tp.Any]] = [
-                {"params": [net.whitening_proj], "lr": self.phase3_lr * self.lr_wp, "weight_decay": 0.0},
-                {"params": [net.whitening_bias], "lr": self.phase3_lr * 10.0, "weight_decay": 0.0},
+                {"params": [net.whitening_proj], "lr": self.lr * self.lr_wp, "weight_decay": 0.0},
+                {"params": [net.whitening_bias], "lr": self.lr * 10.0, "weight_decay": 0.0},
             ]
         else:
             adaptor = [
-                {"params": list(net.bn_input.parameters()), "lr": self.phase3_lr, "weight_decay": 0.0},
-                {"params": list(net.bn_score.parameters()), "lr": self.phase3_lr, "weight_decay": 0.0},
+                {"params": list(net.bn_input.parameters()), "lr": self.lr, "weight_decay": 0.0},
+                {"params": list(net.bn_score.parameters()), "lr": self.lr, "weight_decay": 0.0},
             ]
         head: tp.List[tp.Dict[str, tp.Any]] = []
         if net.head is not None:
             head = [
                 {
                     "params": list(net.head.parameters()),
-                    "lr": self.phase3_lr * self.lr_head,
+                    "lr": self.lr * self.lr_head,
                     "weight_decay": self.weight_decay,
                 }
             ]
         transformer = [
-            {"params": list(net.pos_emb.parameters()), "lr": self.phase3_lr * self.lr_transformer, "weight_decay": 0.0},
+            {"params": list(net.pos_emb.parameters()), "lr": self.lr * self.lr_transformer, "weight_decay": 0.0},
             {
                 "params": (
                     [p for layer in net.attention_layers for p in layer.parameters()]
                     + [p for layer in net.forward_layers for p in layer.parameters()]
                 ),
-                "lr": self.phase3_lr * self.lr_transformer,
+                "lr": self.lr * self.lr_transformer,
                 "weight_decay": self.weight_decay,
             },
             {
@@ -243,7 +200,7 @@ class UniSRecModel:
                     + [p for layer in net.forward_layernorms for p in layer.parameters()]
                     + list(net.last_layernorm.parameters())
                 ),
-                "lr": self.phase3_lr,
+                "lr": self.lr,
                 "weight_decay": 0.0,
             },
         ]
@@ -279,13 +236,17 @@ class UniSRecModel:
             timestamps,
             max_len=self.session_max_len,
             min_interactions=self.train_min_user_interactions,
-            id_mapping=self.id_mapping,
         )
+        if len(x) == 0:
+            raise ValueError(
+                f"No users with >= {self.train_min_user_interactions} interactions. "
+                "Cannot train on empty data."
+            )
         self._unique_items = unique_items.cpu()
         self._unique_users = unique_users.cpu()
         n_items = len(unique_items)
 
-        aligned_emb = align_embeddings(self.pretrained_item_embeddings, unique_items, n_items, self.id_mapping)
+        aligned_emb = align_embeddings(self.pretrained_item_embeddings, unique_items, n_items)
 
         net = UniSRec(
             n_items=n_items,
@@ -303,28 +264,20 @@ class UniSRecModel:
             ffn_expansion=self.ffn_expansion,
         )
 
-        train_dl = make_dataloader(x, y, batch_size=self.batch_size, shuffle=True)
+        train_dl = make_dataloader(
+            x, y, batch_size=self.batch_size, shuffle=True, num_workers=self.dataloader_num_workers,
+        )
 
         val_dl = None
         if self.patience is not None:
             val_y_last = y[:, -1:]
-            val_dl = make_dataloader(x, val_y_last, batch_size=self.batch_size, shuffle=False)
+            val_dl = make_dataloader(
+                x, val_y_last, batch_size=self.batch_size, shuffle=False, num_workers=self.dataloader_num_workers,
+            )
 
-        def _run_phase(param_groups: tp.List[tp.Dict], use_id: bool, max_epochs: int) -> None:
-            lm = self._make_lightning(net, param_groups, use_id, max_epochs, train_dl)
-            trainer = self._make_trainer(max_epochs, val_dl)
-            trainer.fit(lm, train_dl, val_dl)
-
-        if self.phase1_epochs > 0:
-            _run_phase(self._phase1_params(net), use_id=True, max_epochs=self.phase1_epochs)
-
-        if self.phase2_epochs > 0 and self.use_adaptor_ffn:
-            net.freeze_transformer()
-            _run_phase(self._phase2_params(net), use_id=False, max_epochs=self.phase2_epochs)
-
-        if self.phase3_epochs > 0:
-            net.unfreeze_transformer()
-            _run_phase(self._phase3_params(net), use_id=False, max_epochs=self.phase3_epochs)
+        lm = self._make_lightning(net, self._param_groups(net), self.epochs, train_dl)
+        trainer = self._make_trainer(self.epochs, val_dl)
+        trainer.fit(lm, train_dl, val_dl)
 
         self._net = net
         self.is_fitted = True
@@ -340,7 +293,6 @@ class UniSRecModel:
                 "unique_items": self._unique_items,
                 "unique_users": self._unique_users,
                 "n_items": len(self._unique_items),
-                "id_mapping": self.id_mapping,
             },
             path,
         )
@@ -350,9 +302,8 @@ class UniSRecModel:
         self._unique_items = ckpt["unique_items"].cpu()
         self._unique_users = ckpt["unique_users"].cpu()
         n_items = ckpt["n_items"]
-        self.id_mapping = ckpt.get("id_mapping", "dense")
 
-        aligned_emb = align_embeddings(self.pretrained_item_embeddings, self._unique_items, n_items, self.id_mapping)
+        aligned_emb = align_embeddings(self.pretrained_item_embeddings, self._unique_items, n_items)
 
         self._net = UniSRec(
             n_items=n_items,
@@ -438,15 +389,13 @@ class UniSRecModel:
             Internal IDs in ``[0, n_items]``.  0 means unknown item.
         """
         assert self._unique_items is not None, "Model not fitted or loaded"
-        if self.id_mapping == "hash":
-            n_items = len(self._unique_items)
-            known = torch.isin(external_ids, self._unique_items)
-            result = torch.zeros_like(external_ids)
-            result[known] = hash_item_ids(external_ids[known], n_items)
-            return result
-
-        lookup = {int(v): i + 1 for i, v in enumerate(self._unique_items.tolist())}
-        return torch.tensor([lookup.get(int(x), 0) for x in external_ids.tolist()], dtype=torch.long)
+        sorted_items, sort_idx = self._unique_items.sort()
+        pos = torch.searchsorted(sorted_items, external_ids.cpu())
+        pos = pos.clamp(max=len(sorted_items) - 1)
+        found = sorted_items[pos] == external_ids.cpu()
+        result = torch.zeros_like(external_ids, dtype=torch.long)
+        result[found] = sort_idx[pos[found]] + 1
+        return result
 
     @property
     def net(self) -> UniSRec:

@@ -34,10 +34,9 @@ class TestFlatSASRec:
         emb = net.encode_last(x)
         assert emb.shape == (1, 16)
 
-    def test_padding_invariance(self, net: FlatSASRec) -> None:
-        """Different left-padding should produce same last-position embedding."""
+    def test_determinism(self, net: FlatSASRec) -> None:
+        """Same input produces identical output across two forward passes."""
         net.eval()
-        # Same content should produce identical output
         x_a = torch.tensor([[0, 0, 0, 5, 10]])
         x_b = torch.tensor([[0, 0, 0, 5, 10]])
         with torch.no_grad():

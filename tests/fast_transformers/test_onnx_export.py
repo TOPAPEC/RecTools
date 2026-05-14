@@ -187,7 +187,7 @@ class TestUniSRecModelExport:
             phase2_epochs=0,
             phase3_epochs=0,
         )
-        from rectools.fast_transformers.gpu_data import align_embeddings
+        from rectools.fast_transformers.sequence_data import align_embeddings
 
         unique_items = torch.arange(1, 11)
         aligned = align_embeddings(pretrained, unique_items, 10)

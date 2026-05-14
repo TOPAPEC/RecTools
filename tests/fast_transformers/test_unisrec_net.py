@@ -105,7 +105,8 @@ class TestFreezeUnfreeze:
 
 
 class TestPaddingInvariance:
-    def test_same_input_same_output(self, net: UniSRec) -> None:
+    def test_determinism_and_padding_masking(self, net: UniSRec) -> None:
+        """Same input produces identical output; padding positions are zeroed."""
         net.eval()
         x_a = torch.tensor([[0, 0, 0, 5, 10]])
         x_b = torch.tensor([[0, 0, 0, 5, 10]])

@@ -98,6 +98,5 @@ benchmark_results/
 catboost_info/
 
 # Dev artifacts
-training_folder/
 *.pt
 data/*

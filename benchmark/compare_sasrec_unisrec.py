@@ -18,7 +18,7 @@ from tqdm import tqdm
 from rectools import Columns
 from rectools.dataset import Dataset
 from rectools.fast_transformers import UniSRecModel
-from rectools.fast_transformers.gpu_data import build_sequences
+from rectools.fast_transformers.sequence_data import build_sequences
 from rectools.models import SASRecModel
 
 DATA_DIR = Path("data/ml-20m")
@@ -406,10 +406,8 @@ def main():
         adaptor_dropout=0.2,
         adaptor_type="pca",
         use_adaptor_ffn=True,
-        phase1_epochs=EPOCHS,
-        phase2_epochs=0,
-        phase3_epochs=0,
-        phase1_lr=LR,
+        epochs=EPOCHS,
+        lr=LR,
         optimizer="adam",
         grad_clip=1.0,
         weight_decay=0.0,
