@@ -1,5 +1,6 @@
 """Tests for ONNX export of UniSRec network and UniSRecModel.export_to_onnx."""
 
+import typing as tp
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +34,7 @@ def net() -> UniSRec:
     return model
 
 
-def _export_and_load(net: torch.nn.Module, args, tmp_path: Path, **kwargs):
+def _export_and_load(net: torch.nn.Module, args: tp.Any, tmp_path: Path, **kwargs: tp.Any) -> tp.Any:
     path = str(tmp_path / "model.onnx")
     torch.onnx.export(net, args, path, opset_version=18, **kwargs)
     model = onnx.load(path)

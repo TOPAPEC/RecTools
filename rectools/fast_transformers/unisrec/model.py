@@ -155,7 +155,7 @@ class UniSRecModel:
         return pl.Trainer(
             max_epochs=max_epochs,
             gradient_clip_val=self.grad_clip,
-            callbacks=callbacks or None,
+            callbacks=callbacks or None,  # type: ignore[arg-type]
             enable_checkpointing=False,
             enable_model_summary=False,
             logger=self.verbose > 0,
@@ -291,6 +291,7 @@ class UniSRecModel:
 
         neg_transform = None
         if self.loss in ("BCE", "gBCE", "sampled_softmax"):
+            assert self.n_negatives is not None  # validated in __init__
             neg_transform = _NegativeSampler(n_items, self.n_negatives)
 
         train_dl = DataLoader(
@@ -321,7 +322,7 @@ class UniSRecModel:
     # ── save / load ──
 
     def save_checkpoint(self, path: tp.Union[str, Path]) -> None:
-        assert self._net is not None
+        assert self._net is not None and self._unique_items is not None
         torch.save(
             {
                 "net": self._net.state_dict(),
@@ -335,7 +336,7 @@ class UniSRecModel:
     def load_checkpoint(self, path: tp.Union[str, Path], device: tp.Optional[str] = None) -> None:
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-        ckpt = torch.load(path, map_location=device, weights_only=False)
+        ckpt = torch.load(path, map_location=device, weights_only=False)  # nosec B614
         self._unique_items = ckpt["unique_items"].cpu()
         self._unique_users = ckpt["unique_users"].cpu()
         n_items = ckpt["n_items"]
@@ -504,5 +505,5 @@ class UniSRecModel:
         return self._net
 
     @property
-    def item_id_mapping(self) -> torch.Tensor:
+    def item_id_mapping(self) -> tp.Optional[torch.Tensor]:
         return self._unique_items

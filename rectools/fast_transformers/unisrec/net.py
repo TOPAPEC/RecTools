@@ -1,5 +1,7 @@
 """UniSRec network: SASRec encoder with pretrained text embeddings and learnable adaptor."""
 
+import typing as tp
+
 import torch
 from torch import nn
 
@@ -140,6 +142,7 @@ class UniSRec(nn.Module):
         # ── Frozen pretrained embeddings ──
         if pretrained_embeddings.ndim == 2:
             pretrained_embeddings = pretrained_embeddings.unsqueeze(1)
+        self.frozen_emb: torch.Tensor
         self.register_buffer("frozen_emb", pretrained_embeddings)
         self.n_variants = pretrained_embeddings.shape[1]
 
@@ -147,6 +150,7 @@ class UniSRec(nn.Module):
         emb_for_init = pretrained_embeddings[1:, 0, :]  # skip padding row
 
         # ── Adaptor ──
+        self.head: tp.Optional[nn.Sequential] = None
         if adaptor_type == "pca":
             self.whitening_bias = nn.Parameter(emb_for_init.mean(dim=0))
             if use_adaptor_ffn:
@@ -155,7 +159,6 @@ class UniSRec(nn.Module):
                 self.head = _make_mlp(proj_dim, proj_dim, n_factors, adaptor_dropout)
             else:
                 self.whitening_proj = nn.Parameter(self._pca_init(emb_for_init, n_factors))
-                self.head = None
         elif adaptor_type == "bn":
             self.bn_input = nn.BatchNorm1d(qwen_dim)
             self.bn_score = nn.BatchNorm1d(qwen_dim)
@@ -210,6 +213,7 @@ class UniSRec(nn.Module):
         if self.adaptor_type == "pca":
             projected = (x - self.whitening_bias) @ self.whitening_proj
             return self.head(projected) if self.head is not None else projected
+        assert self.head is not None
         shape = x.shape
         flat = x.view(-1, shape[-1])
         return self.head(self.bn_input(flat)).view(*shape[:-1], self.n_factors)
@@ -218,6 +222,7 @@ class UniSRec(nn.Module):
         if self.adaptor_type == "pca":
             projected = (x - self.whitening_bias) @ self.whitening_proj
             return self.head(projected) if self.head is not None else projected
+        assert self.head is not None
         shape = x.shape
         flat = x.view(-1, shape[-1])
         return self.head(self.bn_score(flat)).view(*shape[:-1], self.n_factors)

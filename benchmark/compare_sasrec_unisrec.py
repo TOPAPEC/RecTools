@@ -15,6 +15,7 @@ If pretrained embeddings are not found, random embeddings are generated
 import gc
 import io
 import time
+import typing as tp
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -44,7 +45,7 @@ MIN_ITEM_INTERACTIONS = 5
 MIN_USER_INTERACTIONS = 2
 
 EPOCHS = 10
-PATIENCE = None
+PATIENCE: tp.Optional[int] = None
 BATCH_SIZE = 128
 SESSION_MAX_LEN = 200
 N_FACTORS = 256
@@ -101,7 +102,7 @@ def load_and_preprocess() -> pd.DataFrame:
     return ratings
 
 
-def split_eval(ratings: pd.DataFrame):
+def split_eval(ratings: pd.DataFrame) -> tp.Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     ratings = ratings.sort_values(["user_id", "timestamp"])
     grouped = ratings.groupby("user_id")
     test_idx = grouped.tail(1).index
@@ -111,7 +112,7 @@ def split_eval(ratings: pd.DataFrame):
     return ratings.loc[train_idx], ratings.loc[val_idx], ratings.loc[test_idx]
 
 
-def to_tensors(df: pd.DataFrame):
+def to_tensors(df: pd.DataFrame) -> tp.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     return (
         torch.tensor(df["user_id"].values, dtype=torch.long),
         torch.tensor(df["item_id"].values, dtype=torch.long),
@@ -135,7 +136,9 @@ def get_pretrained_embeddings(item_ids: pd.Series, dim: int = 1024) -> torch.Ten
 
 
 @torch.no_grad()
-def evaluate_unisrec(model, train_df, test_df, k=10, batch_size=256):
+def evaluate_unisrec(
+    model: UniSRecModel, train_df: pd.DataFrame, test_df: pd.DataFrame, k: int = 10, batch_size: int = 256
+) -> tp.Dict[str, tp.Any]:
     net = model.net
     net.cuda().eval()
     device = torch.device("cuda")
@@ -143,6 +146,7 @@ def evaluate_unisrec(model, train_df, test_df, k=10, batch_size=256):
 
     item_embs = net.project_all()
     unique_items = model.item_id_mapping
+    assert unique_items is not None
     ext_to_int = {int(unique_items[i].item()): i + 1 for i in range(len(unique_items))}
 
     train_grouped = train_df.sort_values("timestamp").groupby("user_id")["item_id"].agg(list).to_dict()
@@ -181,7 +185,9 @@ def evaluate_unisrec(model, train_df, test_df, k=10, batch_size=256):
     return {"HR@10": hits / total, "NDCG@10": ndcg_sum / total, "MRR@10": mrr_sum / total, "n_users": total}
 
 
-def evaluate_sasrec(model, dataset_for_recommend, test_df, k=10):
+def evaluate_sasrec(
+    model: SASRecModel, dataset_for_recommend: Dataset, test_df: pd.DataFrame, k: int = 10
+) -> tp.Dict[str, tp.Any]:
     test_users = test_df["user_id"].unique()
     reco = model.recommend(users=test_users, dataset=dataset_for_recommend, k=k, filter_viewed=False)
 
@@ -201,7 +207,7 @@ def evaluate_sasrec(model, dataset_for_recommend, test_df, k=10):
     return {"HR@10": hits / total, "NDCG@10": ndcg_sum / total, "MRR@10": mrr_sum / total, "n_users": total}
 
 
-def cleanup():
+def cleanup() -> None:
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -313,7 +319,7 @@ def write_report(timings: dict, metrics: dict, data_info: dict) -> str:
     return report
 
 
-def main():
+def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("This benchmark requires CUDA. No GPU detected.")
     torch.set_float32_matmul_precision("high")
@@ -368,10 +374,10 @@ def main():
     print(f"  Preprocessing (Dataset.construct): {timings['sasrec_preprocessing']:.2f}s")
 
     # Model init + training
-    def sasrec_trainer(**kwargs):
+    def sasrec_trainer(**kwargs: tp.Any) -> tp.Any:
         import pytorch_lightning as pl
 
-        callbacks = []
+        callbacks: tp.List[tp.Any] = []
         if PATIENCE is not None:
             from pytorch_lightning.callbacks import EarlyStopping
 
@@ -387,7 +393,7 @@ def main():
             devices=1,
         )
 
-    sasrec_kwargs = dict(
+    sasrec_kwargs: tp.Dict[str, tp.Any] = dict(
         n_factors=N_FACTORS,
         n_blocks=N_BLOCKS,
         n_heads=N_HEADS,
@@ -404,7 +410,7 @@ def main():
     )
     if PATIENCE is not None:
 
-        def sasrec_val_mask(interactions_df, **kwargs):
+        def sasrec_val_mask(interactions_df: pd.DataFrame, **kwargs: tp.Any) -> pd.Series:
             idx = interactions_df.groupby(Columns.User).tail(1).index
             mask = pd.Series(False, index=interactions_df.index)
             mask.loc[idx] = True
@@ -419,7 +425,7 @@ def main():
     t0 = time.time()
     sasrec.fit(dataset)
     timings["sasrec_training"] = time.time() - t0
-    timings["sasrec_epochs_done"] = sasrec.fit_trainer.current_epoch + 1
+    timings["sasrec_epochs_done"] = sasrec.fit_trainer.current_epoch + 1 if sasrec.fit_trainer else EPOCHS
     print(f"  Training: {timings['sasrec_training']:.1f}s, {timings['sasrec_epochs_done']} epochs")
 
     # Eval

@@ -1,5 +1,7 @@
 """Tests for UniSRecModel (standalone, tensor-based API)."""
 
+import typing as tp
+
 import pytest
 import torch
 
@@ -13,7 +15,9 @@ def _make_embeddings(n_items: int = 25, dim: int = 64) -> torch.Tensor:
     return emb
 
 
-def _make_interactions(n_users: int = 20, n_items: int = 25, seed: int = 42):
+def _make_interactions(
+    n_users: int = 20, n_items: int = 25, seed: int = 42
+) -> tp.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Generate synthetic (user_ids, item_ids, timestamps) tensors."""
     rng = torch.Generator().manual_seed(seed)
     users, items, timestamps = [], [], []
@@ -31,8 +35,8 @@ def _make_interactions(n_users: int = 20, n_items: int = 25, seed: int = 42):
     )
 
 
-def _make_model(**kwargs) -> UniSRecModel:
-    defaults = dict(
+def _make_model(**kwargs: tp.Any) -> UniSRecModel:
+    defaults: tp.Dict[str, tp.Any] = dict(
         pretrained_item_embeddings=_make_embeddings(),
         n_factors=16,
         projection_hidden=32,
@@ -73,6 +77,7 @@ class TestFit:
         model = _make_model()
         model.fit(user_ids, item_ids, timestamps)
         mapping = model.item_id_mapping
+        assert mapping is not None
         original_unique = torch.unique(item_ids)
         assert set(mapping.tolist()) == set(original_unique.tolist())
 
@@ -173,7 +178,7 @@ class TestScheduler:
 
 
 class TestCheckpoint:
-    def test_save_load_roundtrip(self, tmp_path) -> None:
+    def test_save_load_roundtrip(self, tmp_path: tp.Any) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(epochs=1)
         model.fit(user_ids, item_ids, timestamps)
@@ -187,6 +192,8 @@ class TestCheckpoint:
 
         mapping1 = model.item_id_mapping
         mapping2 = model2.item_id_mapping
+        assert mapping1 is not None
+        assert mapping2 is not None
         assert torch.equal(mapping1, mapping2)
 
 
@@ -213,6 +220,7 @@ class TestMapItemIds:
         model = _make_model(epochs=1)
         model.fit(user_ids, item_ids, timestamps)
         unique = model.item_id_mapping
+        assert unique is not None
         result = model.map_item_ids(unique)
         expected = torch.arange(1, len(unique) + 1, dtype=torch.long)
         assert result.tolist() == expected.tolist()

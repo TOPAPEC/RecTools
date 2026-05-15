@@ -269,7 +269,7 @@ class TestMatchRecTools:
         targets = torch.randint(1, n_items, (B,))
         # Ensure some hits by placing target at random positions
         for i in range(0, B, 3):
-            pos = torch.randint(0, K, (1,)).item()
+            pos = int(torch.randint(0, K, (1,)).item())
             topk[i, pos] = targets[i]
 
         reco, interactions = _build_rectools_inputs(topk, targets)

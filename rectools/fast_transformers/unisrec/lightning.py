@@ -171,6 +171,7 @@ class UniSRecLightning(pl.LightningModule):
     # ── optimizer / scheduler ──
 
     def configure_optimizers(self) -> tp.Any:
+        opt: torch.optim.Optimizer
         if self.optimizer_name == "adamw":
             opt = torch.optim.AdamW(self._param_groups)
         elif self.optimizer_name == "adam":
@@ -183,8 +184,8 @@ class UniSRecLightning(pl.LightningModule):
 
         if self.scheduler_name == "cosine_warmup":
             total = self.total_steps or 1
-            warmup = int(total * self.warmup_ratio)
-            scheduler = _cosine_warmup_scheduler(opt, warmup, total, self.min_lr_ratio)
+            warmup_steps = int(total * self.warmup_ratio)
+            scheduler = _cosine_warmup_scheduler(opt, warmup_steps, total, self.min_lr_ratio)
             return {"optimizer": opt, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
         raise ValueError(f"Unknown scheduler: {self.scheduler_name}")
