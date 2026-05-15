@@ -107,9 +107,39 @@ class TestLosses:
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
+    def test_bce_loss_with_patience(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(loss="BCE", n_negatives=3, patience=2, epochs=3)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
+    def test_gbce_loss_with_patience(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(loss="gBCE", n_negatives=3, patience=2, epochs=3)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
+    def test_sampled_softmax_loss_with_patience(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(loss="sampled_softmax", n_negatives=3, patience=2, epochs=3)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
     def test_invalid_loss_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported loss"):
             _make_model(loss="invalid")
+
+    def test_n_negatives_zero_raises(self) -> None:
+        with pytest.raises(ValueError, match="positive integer"):
+            _make_model(loss="BCE", n_negatives=0)
+
+    def test_n_negatives_negative_raises(self) -> None:
+        with pytest.raises(ValueError, match="positive integer"):
+            _make_model(loss="BCE", n_negatives=-1)
+
+    def test_n_negatives_none_for_bce_raises(self) -> None:
+        with pytest.raises(ValueError, match="positive integer"):
+            _make_model(loss="BCE", n_negatives=None)
 
 
 class TestOptimizer:

@@ -6,12 +6,29 @@ from pathlib import Path
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping
-
 from torch.utils.data import DataLoader
 
 from ..preprocessing import SequenceBatchDataset, align_embeddings, build_sequences
 from .lightning import SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS, UniSRecLightning
 from .net import UniSRec
+
+
+class _NegativeSampler:
+    """Add ``negatives`` field to a batch, avoiding positive collisions."""
+
+    def __init__(self, n_items: int, n_negatives: int) -> None:
+        self.n_items = n_items
+        self.n_negatives = n_negatives
+
+    def __call__(self, batch: tp.Dict[str, torch.Tensor]) -> tp.Dict[str, torch.Tensor]:
+        y = batch["y"]
+        negs = torch.randint(1, self.n_items + 1, (*y.shape, self.n_negatives), device=y.device)
+        # Resample positions where negative == positive
+        collisions = negs == y.unsqueeze(-1)
+        if collisions.any():
+            negs[collisions] = torch.randint(1, self.n_items + 1, (int(collisions.sum()),), device=y.device)
+        batch["negatives"] = negs
+        return batch
 
 
 class _ProjectAllWrapper(torch.nn.Module):
@@ -81,8 +98,9 @@ class UniSRecModel:
     ) -> None:
         if loss not in SUPPORTED_LOSSES:
             raise ValueError(f"Unsupported loss '{loss}'. Choose from {SUPPORTED_LOSSES}")
-        if loss in ("BCE", "gBCE", "sampled_softmax") and n_negatives is None:
-            raise ValueError(f"Loss '{loss}' requires n_negatives to be set")
+        if loss in ("BCE", "gBCE", "sampled_softmax"):
+            if not isinstance(n_negatives, int) or n_negatives <= 0:
+                raise ValueError(f"Loss '{loss}' requires n_negatives to be a positive integer")
         if optimizer not in SUPPORTED_OPTIMIZERS:
             raise ValueError(f"Unsupported optimizer '{optimizer}'. Choose from {SUPPORTED_OPTIMIZERS}")
         if scheduler not in SUPPORTED_SCHEDULERS:
@@ -240,8 +258,7 @@ class UniSRecModel:
         )
         if len(x) == 0:
             raise ValueError(
-                f"No users with >= {self.train_min_user_interactions} interactions. "
-                "Cannot train on empty data."
+                f"No users with >= {self.train_min_user_interactions} interactions. " "Cannot train on empty data."
             )
         self._unique_items = unique_items.cpu()
         self._unique_users = unique_users.cpu()
@@ -265,30 +282,25 @@ class UniSRecModel:
             ffn_expansion=self.ffn_expansion,
         )
 
-        transform = None
+        neg_transform = None
         if self.loss in ("BCE", "gBCE", "sampled_softmax"):
-            n_neg = self.n_negatives
-            n_internal = n_items
-
-            def _add_negatives(batch: tp.Dict[str, torch.Tensor]) -> tp.Dict[str, torch.Tensor]:
-                y = batch["y"]
-                negs = torch.randint(1, n_internal + 1, (*y.shape, n_neg))
-                batch["negatives"] = negs
-                return batch
-
-            transform = _add_negatives
+            neg_transform = _NegativeSampler(n_items, self.n_negatives)
 
         train_dl = DataLoader(
-            SequenceBatchDataset(x, y, transform=transform),
-            batch_size=self.batch_size, shuffle=True, num_workers=self.dataloader_num_workers,
+            SequenceBatchDataset(x, y, transform=neg_transform),
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.dataloader_num_workers,
         )
 
         val_dl = None
         if self.patience is not None:
             val_y_last = y[:, -1:]
             val_dl = DataLoader(
-                SequenceBatchDataset(x, val_y_last),
-                batch_size=self.batch_size, shuffle=False, num_workers=self.dataloader_num_workers,
+                SequenceBatchDataset(x, val_y_last, transform=neg_transform),
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=self.dataloader_num_workers,
             )
 
         lm = self._make_lightning(net, self._param_groups(net), self.epochs, train_dl)

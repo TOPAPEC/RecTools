@@ -14,7 +14,6 @@ If pretrained embeddings are not found, random embeddings are generated
 
 import gc
 import io
-import os
 import time
 import zipfile
 from datetime import datetime
@@ -211,9 +210,7 @@ def write_report(timings: dict, metrics: dict, data_info: dict) -> str:
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A"
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     dataset_str = (
-        f"ML-20M (min_rating={MIN_RATING},"
-        f" min_item={MIN_ITEM_INTERACTIONS},"
-        f" min_user={MIN_USER_INTERACTIONS})"
+        f"ML-20M (min_rating={MIN_RATING}," f" min_item={MIN_ITEM_INTERACTIONS}," f" min_user={MIN_USER_INTERACTIONS})"
     )
     lines = [
         "# SASRec vs UniSRec-ID Comparison",
@@ -317,6 +314,8 @@ def write_report(timings: dict, metrics: dict, data_info: dict) -> str:
 
 
 def main():
+    if not torch.cuda.is_available():
+        raise RuntimeError("This benchmark requires CUDA. No GPU detected.")
     torch.set_float32_matmul_precision("high")
     timings = {}
 

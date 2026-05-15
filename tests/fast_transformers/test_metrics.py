@@ -17,12 +17,12 @@ from rectools.fast_transformers.metrics import (
     mrr_at_k,
     ndcg_at_k,
 )
-from rectools.metrics import HitRate, MRR, NDCG
-
+from rectools.metrics import MRR, NDCG, HitRate
 
 # ---------------------------------------------------------------------------
 # Helpers to bridge tensor metrics <-> RecTools DataFrame metrics
 # ---------------------------------------------------------------------------
+
 
 def _build_rectools_inputs(
     topk_ids: torch.Tensor,
@@ -36,21 +36,26 @@ def _build_rectools_inputs(
             users.append(u)
             items.append(topk_ids[u, r].item())
             ranks.append(r + 1)
-    reco = pd.DataFrame({
-        Columns.User: users,
-        Columns.Item: items,
-        Columns.Rank: ranks,
-    })
-    interactions = pd.DataFrame({
-        Columns.User: list(range(B)),
-        Columns.Item: targets.tolist(),
-    })
+    reco = pd.DataFrame(
+        {
+            Columns.User: users,
+            Columns.Item: items,
+            Columns.Rank: ranks,
+        }
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: list(range(B)),
+            Columns.Item: targets.tolist(),
+        }
+    )
     return reco, interactions
 
 
 # ---------------------------------------------------------------------------
 # HitRate
 # ---------------------------------------------------------------------------
+
 
 class TestHitRate:
     def test_all_hits(self) -> None:
@@ -77,6 +82,7 @@ class TestHitRate:
 # ---------------------------------------------------------------------------
 # NDCG
 # ---------------------------------------------------------------------------
+
 
 class TestNDCG:
     def test_perfect_ranking(self) -> None:
@@ -114,6 +120,7 @@ class TestNDCG:
 # MRR
 # ---------------------------------------------------------------------------
 
+
 class TestMRR:
     def test_hit_at_rank_1(self) -> None:
         topk = torch.tensor([[5, 2, 3]])
@@ -142,6 +149,7 @@ class TestMRR:
 # compute_metrics
 # ---------------------------------------------------------------------------
 
+
 class TestComputeMetrics:
     def test_default_k(self) -> None:
         topk = torch.tensor([[5, 2], [1, 7]])
@@ -168,28 +176,33 @@ class TestComputeMetrics:
 # Cross-validation with RecTools metrics
 # ---------------------------------------------------------------------------
 
+
 class TestMatchRecTools:
     """Verify that our GPU metrics produce identical results to RecTools."""
 
     @pytest.fixture()
     def scenario_mixed(self) -> tuple[torch.Tensor, torch.Tensor]:
         """4 users, k=5. Mix of hits at various ranks and misses."""
-        topk = torch.tensor([
-            [10, 20, 30, 40, 50],   # target=30, hit at rank 3
-            [11, 21, 31, 41, 51],   # target=99, no hit
-            [12, 22, 32, 42, 52],   # target=12, hit at rank 1
-            [13, 23, 33, 43, 53],   # target=53, hit at rank 5
-        ])
+        topk = torch.tensor(
+            [
+                [10, 20, 30, 40, 50],  # target=30, hit at rank 3
+                [11, 21, 31, 41, 51],  # target=99, no hit
+                [12, 22, 32, 42, 52],  # target=12, hit at rank 1
+                [13, 23, 33, 43, 53],  # target=53, hit at rank 5
+            ]
+        )
         targets = torch.tensor([30, 99, 12, 53])
         return topk, targets
 
     @pytest.fixture()
     def scenario_all_hit(self) -> tuple[torch.Tensor, torch.Tensor]:
-        topk = torch.tensor([
-            [1, 2, 3],
-            [4, 5, 6],
-            [7, 8, 9],
-        ])
+        topk = torch.tensor(
+            [
+                [1, 2, 3],
+                [4, 5, 6],
+                [7, 8, 9],
+            ]
+        )
         targets = torch.tensor([2, 4, 9])
         return topk, targets
 

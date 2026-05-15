@@ -1,6 +1,5 @@
 """Tests for vectorized sequence building and data utilities."""
 
-import pytest
 import torch
 
 from rectools.fast_transformers.preprocessing.sequence_data import (
@@ -401,5 +400,3 @@ class TestSequenceBatchDataset:
         batch = ds[0]
         assert batch["x"].tolist() == [10, 20]
         assert batch["y"].tolist() == [30, 40]
-
-

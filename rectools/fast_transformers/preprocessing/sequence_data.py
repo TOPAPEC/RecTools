@@ -142,13 +142,16 @@ def align_embeddings(
     Tensor (n_items + 1, D) or (n_items + 1, K, D)
         Aligned embeddings with padding row at index 0.
     """
-    idx = unique_items.long().cpu()
+    device = pretrained.device
+    idx = unique_items.long().to(device)
     valid = (idx >= 0) & (idx < pretrained.shape[0])
 
     if pretrained.ndim == 2:
-        aligned = torch.zeros(n_items + 1, pretrained.shape[1])
+        aligned = torch.zeros(n_items + 1, pretrained.shape[1], device=device, dtype=pretrained.dtype)
     else:
-        aligned = torch.zeros(n_items + 1, pretrained.shape[1], pretrained.shape[2])
+        aligned = torch.zeros(
+            n_items + 1, pretrained.shape[1], pretrained.shape[2], device=device, dtype=pretrained.dtype
+        )
 
     aligned[1:][valid] = pretrained[idx[valid]]
     return aligned

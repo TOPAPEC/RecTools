@@ -94,7 +94,7 @@ def mrr_at_k(
     Tensor (scalar)
         Mean reciprocal rank across users.
     """
-    hits = (topk_ids == targets.unsqueeze(1))  # (B, K)
+    hits = topk_ids == targets.unsqueeze(1)  # (B, K)
     # For each user find the rank of the first hit (1-based), 0 if no hit
     has_hit = hits.any(dim=1)
     # argmax returns the first True index
@@ -146,4 +146,5 @@ def compute_metrics(
 def _log(base: int) -> float:
     """Natural log of base (cached constant)."""
     import math
+
     return math.log(base)
