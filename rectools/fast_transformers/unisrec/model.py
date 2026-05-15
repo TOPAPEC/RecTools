@@ -94,6 +94,7 @@ class UniSRecModel:
         batch_size: int = 128,
         dataloader_num_workers: int = 0,
         train_min_user_interactions: int = 2,
+        device: tp.Optional[str] = None,
         verbose: int = 0,
     ) -> None:
         if loss not in SUPPORTED_LOSSES:
@@ -136,6 +137,7 @@ class UniSRecModel:
         self.batch_size = batch_size
         self.dataloader_num_workers = dataloader_num_workers
         self.train_min_user_interactions = train_min_user_interactions
+        self.device = device
         self.verbose = verbose
 
         self._net: tp.Optional[UniSRec] = None
@@ -249,14 +251,13 @@ class UniSRecModel:
         -------
         self
         """
-        seq_device = "cuda" if torch.cuda.is_available() else None
         x, y, unique_items, unique_users = build_sequences(
             user_ids,
             item_ids,
             timestamps,
             max_len=self.session_max_len,
             min_interactions=self.train_min_user_interactions,
-            device=seq_device,
+            device=self.device,
         )
         if len(x) == 0:
             raise ValueError(
@@ -283,6 +284,10 @@ class UniSRecModel:
             ffn_type=self.ffn_type,
             ffn_expansion=self.ffn_expansion,
         )
+
+        # DataLoader with num_workers>0 requires CPU tensors
+        if x.is_cuda:
+            x, y = x.cpu(), y.cpu()
 
         neg_transform = None
         if self.loss in ("BCE", "gBCE", "sampled_softmax"):

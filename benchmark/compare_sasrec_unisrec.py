@@ -445,7 +445,7 @@ def main():
     # Preprocessing
     torch.cuda.synchronize()
     t0 = time.time()
-    _ = build_sequences(user_ids_t, item_ids_t, timestamps_t, max_len=SESSION_MAX_LEN)
+    _ = build_sequences(user_ids_t, item_ids_t, timestamps_t, max_len=SESSION_MAX_LEN, device="cuda")
     torch.cuda.synchronize()
     timings["unisrec_preprocessing"] = time.time() - t0
     print(f"  Preprocessing (build_sequences): {timings['unisrec_preprocessing']:.4f}s")
@@ -475,6 +475,7 @@ def main():
         batch_size=BATCH_SIZE,
         dataloader_num_workers=0,
         train_min_user_interactions=MIN_USER_INTERACTIONS,
+        device="cuda",
         verbose=1,
     )
     timings["unisrec_model_init"] = time.time() - t0
