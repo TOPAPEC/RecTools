@@ -147,11 +147,9 @@ def align_embeddings(
     valid = (idx >= 0) & (idx < pretrained.shape[0])
 
     if pretrained.ndim == 2:
-        aligned = torch.zeros(n_items + 1, pretrained.shape[1], device=device, dtype=pretrained.dtype)
+        aligned = torch.zeros(n_items + 1, pretrained.shape[1], device=device)
     else:
-        aligned = torch.zeros(
-            n_items + 1, pretrained.shape[1], pretrained.shape[2], device=device, dtype=pretrained.dtype
-        )
+        aligned = torch.zeros(n_items + 1, pretrained.shape[1], pretrained.shape[2], device=device)
 
     aligned[1:][valid] = pretrained[idx[valid]]
     return aligned
