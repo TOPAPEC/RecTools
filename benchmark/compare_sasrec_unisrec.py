@@ -2,16 +2,27 @@
 
 Both use full softmax, Adam, n_factors=256, 10 epochs.
 MIN_RATING=-1 (no filter), MIN_ITEM_INTERACTIONS=5, MIN_USER_INTERACTIONS=2.
-Writes results to scripts/comparison_report.md.
+Writes results to benchmark/comparison_report.md.
+
+Usage:
+    python benchmark/compare_sasrec_unisrec.py
+
+Data is downloaded automatically if not present.
+If pretrained embeddings are not found, random embeddings are generated
+(sufficient for ID-only comparison).
 """
 
 import gc
+import io
+import os
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import requests
 import torch
 from tqdm import tqdm
 
@@ -21,9 +32,13 @@ from rectools.fast_transformers import UniSRecModel
 from rectools.fast_transformers.preprocessing import build_sequences
 from rectools.models import SASRecModel
 
-DATA_DIR = Path("data/ml-20m")
+BENCHMARK_DIR = Path(__file__).resolve().parent
+DATA_DIR = BENCHMARK_DIR / "data" / "ml-20m"
+RATINGS_PATH = DATA_DIR / "ratings.csv"
 CACHE_EMB_PATH = DATA_DIR / "qwen_embeddings.pt"
-REPORT_PATH = Path("scripts/comparison_report.md")
+REPORT_PATH = BENCHMARK_DIR / "comparison_report.md"
+
+ML20M_URL = "https://files.grouplens.org/datasets/movielens/ml-20m.zip"
 
 MIN_RATING = -1
 MIN_ITEM_INTERACTIONS = 5
@@ -39,8 +54,36 @@ N_HEADS = 1
 LR = 1e-3
 
 
-def load_and_preprocess():
-    ratings = pd.read_csv(DATA_DIR / "ml-20m" / "ratings.csv")
+def download_ml20m() -> None:
+    """Download and extract ML-20M if not present."""
+    if RATINGS_PATH.exists():
+        return
+    print(f"Downloading ML-20M from {ML20M_URL} ...")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    resp = requests.get(ML20M_URL, stream=True, timeout=600)
+    resp.raise_for_status()
+    buf = io.BytesIO()
+    total = int(resp.headers.get("content-length", 0))
+    with tqdm(total=total, unit="B", unit_scale=True, desc="Download") as pbar:
+        for chunk in resp.iter_content(chunk_size=1 << 20):
+            buf.write(chunk)
+            pbar.update(len(chunk))
+    print("Extracting...")
+    with zipfile.ZipFile(buf) as zf:
+        for member in zf.namelist():
+            # ml-20m/ratings.csv -> DATA_DIR/ratings.csv
+            basename = Path(member).name
+            if not basename:
+                continue
+            target = DATA_DIR / basename
+            with zf.open(member) as src, open(target, "wb") as dst:
+                dst.write(src.read())
+    print(f"Extracted to {DATA_DIR}")
+
+
+def load_and_preprocess() -> pd.DataFrame:
+    download_ml20m()
+    ratings = pd.read_csv(RATINGS_PATH)
     ratings.columns = ["user_id", "item_id", "rating", "timestamp"]
 
     if MIN_RATING > 0:
@@ -59,7 +102,7 @@ def load_and_preprocess():
     return ratings
 
 
-def split_eval(ratings):
+def split_eval(ratings: pd.DataFrame):
     ratings = ratings.sort_values(["user_id", "timestamp"])
     grouped = ratings.groupby("user_id")
     test_idx = grouped.tail(1).index
@@ -69,7 +112,7 @@ def split_eval(ratings):
     return ratings.loc[train_idx], ratings.loc[val_idx], ratings.loc[test_idx]
 
 
-def to_tensors(df):
+def to_tensors(df: pd.DataFrame):
     return (
         torch.tensor(df["user_id"].values, dtype=torch.long),
         torch.tensor(df["item_id"].values, dtype=torch.long),
@@ -77,12 +120,27 @@ def to_tensors(df):
     )
 
 
+def get_pretrained_embeddings(item_ids: pd.Series, dim: int = 1024) -> torch.Tensor:
+    """Load cached embeddings or generate random ones for ID-only comparison."""
+    if CACHE_EMB_PATH.exists():
+        print(f"Loading pretrained embeddings from {CACHE_EMB_PATH}")
+        return torch.load(CACHE_EMB_PATH, weights_only=True)
+
+    max_id = int(item_ids.max())
+    print(f"No pretrained embeddings found at {CACHE_EMB_PATH}")
+    print(f"Generating random embeddings ({max_id + 1}, {dim}) for ID-only comparison")
+    torch.manual_seed(42)
+    emb = torch.randn(max_id + 1, dim)
+    emb[0] = 0.0
+    return emb
+
+
 @torch.no_grad()
 def evaluate_unisrec(model, train_df, test_df, k=10, batch_size=256):
     net = model.net
     net.cuda().eval()
     device = torch.device("cuda")
-    maxlen = net.session_max_len
+    maxlen = model.session_max_len
 
     item_embs = net.project_all()
     unique_items = model.item_id_mapping
@@ -149,11 +207,13 @@ def cleanup():
     torch.cuda.empty_cache()
 
 
-def write_report(timings: dict, metrics: dict, data_info: dict):
+def write_report(timings: dict, metrics: dict, data_info: dict) -> str:
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A"
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     dataset_str = (
-        f"ML-20M (min_rating={MIN_RATING}," f" min_item={MIN_ITEM_INTERACTIONS}," f" min_user={MIN_USER_INTERACTIONS})"
+        f"ML-20M (min_rating={MIN_RATING},"
+        f" min_item={MIN_ITEM_INTERACTIONS},"
+        f" min_user={MIN_USER_INTERACTIONS})"
     )
     lines = [
         "# SASRec vs UniSRec-ID Comparison",
@@ -285,7 +345,7 @@ def main():
     print(f"Split: train={data_info['n_train']:,}, val={data_info['n_val']:,}, test={data_info['n_test']:,}")
 
     user_ids_t, item_ids_t, timestamps_t = to_tensors(train_with_val)
-    pretrained = torch.load(CACHE_EMB_PATH, weights_only=True)
+    pretrained = get_pretrained_embeddings(ratings["item_id"])
 
     # ══════════════════════════════════════════════════════════════
     # 1. SASRec (RecTools)
@@ -390,7 +450,7 @@ def main():
     torch.cuda.synchronize()
     timings["unisrec_preprocessing"] = time.time() - t0
     print(f"  Preprocessing (build_sequences): {timings['unisrec_preprocessing']:.4f}s")
-    timings["prep_speedup"] = timings["sasrec_preprocessing"] / timings["unisrec_preprocessing"]
+    timings["prep_speedup"] = timings["sasrec_preprocessing"] / max(timings["unisrec_preprocessing"], 1e-6)
     print(f"  Speedup vs Dataset.construct: {timings['prep_speedup']:.0f}x")
 
     # Model init
@@ -420,7 +480,7 @@ def main():
     )
     timings["unisrec_model_init"] = time.time() - t0
 
-    # Training (fit includes build_sequences internally, but we already measured preprocessing separately)
+    # Training
     t0 = time.time()
     unisrec_id.fit(user_ids_t, item_ids_t, timestamps_t)
     timings["unisrec_training"] = time.time() - t0

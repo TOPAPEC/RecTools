@@ -89,6 +89,24 @@ class TestLosses:
         model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
+    def test_bce_loss(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(loss="BCE", n_negatives=3, epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
+    def test_gbce_loss(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(loss="gBCE", n_negatives=3, epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
+    def test_sampled_softmax_loss(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(loss="sampled_softmax", n_negatives=3, epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+        assert model.is_fitted
+
     def test_invalid_loss_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported loss"):
             _make_model(loss="invalid")

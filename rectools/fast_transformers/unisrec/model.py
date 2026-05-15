@@ -265,8 +265,21 @@ class UniSRecModel:
             ffn_expansion=self.ffn_expansion,
         )
 
+        transform = None
+        if self.loss in ("BCE", "gBCE", "sampled_softmax"):
+            n_neg = self.n_negatives
+            n_internal = n_items
+
+            def _add_negatives(batch: tp.Dict[str, torch.Tensor]) -> tp.Dict[str, torch.Tensor]:
+                y = batch["y"]
+                negs = torch.randint(1, n_internal + 1, (*y.shape, n_neg))
+                batch["negatives"] = negs
+                return batch
+
+            transform = _add_negatives
+
         train_dl = DataLoader(
-            SequenceBatchDataset(x, y),
+            SequenceBatchDataset(x, y, transform=transform),
             batch_size=self.batch_size, shuffle=True, num_workers=self.dataloader_num_workers,
         )
 
@@ -300,7 +313,9 @@ class UniSRecModel:
             path,
         )
 
-    def load_checkpoint(self, path: tp.Union[str, Path], device: str = "cuda") -> None:
+    def load_checkpoint(self, path: tp.Union[str, Path], device: tp.Optional[str] = None) -> None:
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         ckpt = torch.load(path, map_location=device, weights_only=False)
         self._unique_items = ckpt["unique_items"].cpu()
         self._unique_users = ckpt["unique_users"].cpu()
@@ -392,13 +407,15 @@ class UniSRecModel:
             Internal IDs in ``[0, n_items]``.  0 means unknown item.
         """
         assert self._unique_items is not None, "Model not fitted or loaded"
+        input_device = external_ids.device
+        external_cpu = external_ids.cpu()
         sorted_items, sort_idx = self._unique_items.sort()
-        pos = torch.searchsorted(sorted_items, external_ids.cpu())
+        pos = torch.searchsorted(sorted_items, external_cpu)
         pos = pos.clamp(max=len(sorted_items) - 1)
-        found = sorted_items[pos] == external_ids.cpu()
-        result = torch.zeros_like(external_ids, dtype=torch.long)
+        found = sorted_items[pos] == external_cpu
+        result = torch.zeros_like(external_cpu, dtype=torch.long)
         result[found] = sort_idx[pos[found]] + 1
-        return result
+        return result.to(input_device)
 
     def recommend(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
         """Not supported. Use :meth:`predict_topk` instead.

@@ -1,6 +1,7 @@
 """Tests for UniSRecLightning wrapper and _cosine_warmup_scheduler."""
 
 import math
+import typing as tp
 
 import pytest
 import torch
@@ -42,10 +43,10 @@ def net(pretrained_emb: torch.Tensor) -> UniSRec:
 def _make_module(
     net: UniSRec,
     loss: str = "softmax",
-    n_negatives: int | None = None,
+    n_negatives: tp.Optional[int] = None,
     optimizer: str = "adamw",
-    scheduler: str | None = None,
-    total_steps: int | None = None,
+    scheduler: tp.Optional[str] = None,
+    total_steps: tp.Optional[int] = None,
     lr: float = 1e-3,
     warmup_ratio: float = 0.05,
     min_lr_ratio: float = 0.1,
