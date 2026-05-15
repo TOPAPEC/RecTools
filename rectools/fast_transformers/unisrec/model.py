@@ -249,12 +249,14 @@ class UniSRecModel:
         -------
         self
         """
+        seq_device = "cuda" if torch.cuda.is_available() else None
         x, y, unique_items, unique_users = build_sequences(
             user_ids,
             item_ids,
             timestamps,
             max_len=self.session_max_len,
             min_interactions=self.train_min_user_interactions,
+            device=seq_device,
         )
         if len(x) == 0:
             raise ValueError(
