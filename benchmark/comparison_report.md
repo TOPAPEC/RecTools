@@ -1,7 +1,7 @@
 # SASRec vs UniSRec-ID Comparison
 
-**Date:** 2026-04-24 19:59  
-**GPU:** NVIDIA GeForce RTX 4090  
+**Date:** 2026-05-18 10:14  
+**GPU:** NVIDIA GeForce RTX 3090  
 **Dataset:** ML-20M (min_rating=-1, min_item=5, min_user=2)
 
 ## Data
@@ -36,23 +36,23 @@
 | Stage | SASRec | UniSRec ID |
 |---|---:|---:|
 | Data load & split | 0.0s | 0.0s |
-| Preprocessing | 14.6s | 0.5s |
+| Preprocessing | 6.7s | 0.1s |
 | Model init | 0.0s | 0.0s |
-| Training (10 epochs) | 911.8s | 639.5s |
-| Evaluation | 175.6s | 28.0s |
-| **Total** | **1102.1s** | **668.0s** |
+| Training (10 epochs) | 1347.7s | 869.6s |
+| Evaluation | 56.6s | 31.1s |
+| **Total** | **1411.1s** | **900.8s** |
 
 | | SASRec | UniSRec ID |
 |---|---:|---:|
 | Epochs completed | 11 | 10 |
-| Time per epoch | 82.9s | 63.9s |
-| Preprocessing speedup | — | 29x |
+| Time per epoch | 122.5s | 87.0s |
+| Preprocessing speedup | — | 61x |
 
 ## Quality (test set, 138,493 users)
 
 | Model | HR@10 | NDCG@10 | MRR@10 |
 |---|---:|---:|---:|
-| SASRec | 0.2417 | 0.1410 | 0.1103 |
-| UniSRec ID | 0.2528 | 0.1495 | 0.1179 |
+| SASRec | 0.2404 | 0.1398 | 0.1092 |
+| UniSRec ID | 0.1856 | 0.1055 | 0.0811 |
 
-UniSRec vs SASRec: HR@10 +4.6%, NDCG@10 +6.0%
+UniSRec vs SASRec: HR@10 -22.8%, NDCG@10 -24.6%
