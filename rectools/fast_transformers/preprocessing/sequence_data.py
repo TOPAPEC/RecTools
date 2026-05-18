@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import Dataset as TorchDataset
 
 
-def build_sequences(
+def build_sequences(  # pylint: disable=too-many-locals
     user_ids: torch.Tensor,
     item_ids: torch.Tensor,
     timestamps: torch.Tensor,

@@ -1,5 +1,7 @@
 """Tests for FlatSASRec network."""
 
+# pylint: disable=redefined-outer-name
+
 import pytest
 import torch
 

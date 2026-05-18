@@ -1,5 +1,7 @@
 """Tests for UniSRecLightning wrapper and _cosine_warmup_scheduler."""
 
+# pylint: disable=redefined-outer-name,protected-access
+
 import math
 import typing as tp
 

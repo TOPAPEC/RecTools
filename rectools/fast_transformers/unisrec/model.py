@@ -40,7 +40,7 @@ class _ProjectAllWrapper(torch.nn.Module):
         return self.net.project_all()
 
 
-class UniSRecModel:
+class UniSRecModel:  # pylint: disable=too-many-instance-attributes
     """
     UniSRec sequential recommender with pretrained text embeddings.
 
@@ -56,7 +56,7 @@ class UniSRecModel:
         equals *i*.  Index 0 is padding (zeros).
     """
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-locals
         self,
         pretrained_item_embeddings: torch.Tensor,
         # architecture
@@ -341,6 +341,7 @@ class UniSRecModel:
         self._unique_users = ckpt["unique_users"].cpu()
         n_items = ckpt["n_items"]
 
+        assert self._unique_items is not None
         aligned_emb = align_embeddings(self.pretrained_item_embeddings, self._unique_items, n_items)
 
         self._net = UniSRec(

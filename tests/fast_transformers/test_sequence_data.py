@@ -20,7 +20,7 @@ class TestBuildSequences:
         item_ids = torch.tensor([10, 20, 30, 40, 50, 60])
         timestamps = torch.tensor([1, 2, 3, 4, 5, 6])
 
-        x, y, unique_items, result_users = build_sequences(
+        x, y, _unique_items, result_users = build_sequences(
             user_ids, item_ids, timestamps, max_len=4, min_interactions=2, device=DEVICE
         )
 
@@ -64,7 +64,7 @@ class TestBuildSequences:
         item_ids = torch.tensor([10, 20, 30, 40, 50, 60])
         timestamps = torch.tensor([1, 2, 3, 4, 5, 6])
 
-        x, y, _, result_users = build_sequences(
+        x, _y, _, result_users = build_sequences(
             user_ids, item_ids, timestamps, max_len=4, min_interactions=2, device=DEVICE
         )
 
@@ -78,7 +78,7 @@ class TestBuildSequences:
         item_ids = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90])
         timestamps = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9])
 
-        x, y, _, result_users = build_sequences(
+        x, _y, _, result_users = build_sequences(
             user_ids, item_ids, timestamps, max_len=5, min_interactions=3, device=DEVICE
         )
 
@@ -197,7 +197,7 @@ class TestBuildSequences:
         assert result_users.device.type == DEVICE
 
     def test_output_dtypes(self) -> None:
-        """x and y should be long tensors."""
+        """Check x and y should be long tensors."""
         user_ids = torch.tensor([0, 0])
         item_ids = torch.tensor([1, 2])
         timestamps = torch.tensor([1, 2])
@@ -226,7 +226,7 @@ class TestBuildSequences:
         item_ids = torch.tensor([10, 20, 30, 40, 50, 60])
         timestamps = torch.tensor([1, 2, 3, 4, 5, 6])
 
-        x, y, unique_items, _ = build_sequences(
+        x, y, _unique_items, _ = build_sequences(
             user_ids, item_ids, timestamps, max_len=5, min_interactions=2, device=DEVICE
         )
 

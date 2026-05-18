@@ -51,6 +51,7 @@ class UniSRecLightning(pl.LightningModule):
     # ── helpers ──
 
     def _get_item_embs(self, item_ids: torch.Tensor) -> torch.Tensor:
+        # pylint: disable=protected-access
         return self.net._adapt_score(self.net._sample_frozen(item_ids))
 
     def _get_all_embs(self) -> torch.Tensor:

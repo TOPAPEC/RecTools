@@ -97,7 +97,7 @@ class FlatSASRec(nn.Module):
         -------
         Tensor (B, L, D)
         """
-        B, L = x.shape
+        _B, L = x.shape
         positions = torch.arange(L, device=x.device).unsqueeze(0)
         h = self.item_emb(x) + self.pos_emb(positions)
         h = self.emb_dropout(h)

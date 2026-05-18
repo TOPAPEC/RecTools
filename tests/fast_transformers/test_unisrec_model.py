@@ -23,7 +23,7 @@ def _make_interactions(
     users, items, timestamps = [], [], []
     for u in range(n_users):
         n_inter = torch.randint(3, 8, (1,), generator=rng).item()
-        item_pool = torch.randperm(n_items, generator=rng)[:n_inter] + 1  # 1-based
+        item_pool = torch.randperm(n_items, generator=rng)[: int(n_inter)] + 1  # 1-based
         for rank, item in enumerate(item_pool):
             users.append(u)
             items.append(item.item())
@@ -36,17 +36,17 @@ def _make_interactions(
 
 
 def _make_model(**kwargs: tp.Any) -> UniSRecModel:
-    defaults: tp.Dict[str, tp.Any] = dict(
-        pretrained_item_embeddings=_make_embeddings(),
-        n_factors=16,
-        projection_hidden=32,
-        n_blocks=1,
-        n_heads=2,
-        session_max_len=8,
-        epochs=1,
-        batch_size=16,
-        verbose=0,
-    )
+    defaults: tp.Dict[str, tp.Any] = {
+        "pretrained_item_embeddings": _make_embeddings(),
+        "n_factors": 16,
+        "projection_hidden": 32,
+        "n_blocks": 1,
+        "n_heads": 2,
+        "session_max_len": 8,
+        "epochs": 1,
+        "batch_size": 16,
+        "verbose": 0,
+    }
     defaults.update(kwargs)
     return UniSRecModel(**defaults)
 

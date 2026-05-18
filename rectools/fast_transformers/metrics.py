@@ -12,6 +12,7 @@ These functions assume **leave-one-out** evaluation: each user has exactly
 one ground-truth target item.
 """
 
+import math
 import typing as tp
 
 import torch
@@ -145,6 +146,4 @@ def compute_metrics(
 
 def _log(base: int) -> float:
     """Natural log of base (cached constant)."""
-    import math
-
     return math.log(base)

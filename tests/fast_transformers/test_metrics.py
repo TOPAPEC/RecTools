@@ -11,12 +11,7 @@ import pytest
 import torch
 
 from rectools import Columns
-from rectools.fast_transformers.metrics import (
-    compute_metrics,
-    hitrate_at_k,
-    mrr_at_k,
-    ndcg_at_k,
-)
+from rectools.fast_transformers.metrics import compute_metrics, hitrate_at_k, mrr_at_k, ndcg_at_k
 from rectools.metrics import MRR, NDCG, HitRate
 
 # ---------------------------------------------------------------------------

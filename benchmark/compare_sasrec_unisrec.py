@@ -12,6 +12,8 @@ If pretrained embeddings are not found, random embeddings are generated
 (sufficient for ID-only comparison).
 """
 
+# pylint: disable=too-many-locals,too-many-statements,import-outside-toplevel
+
 import gc
 import io
 import time
@@ -393,21 +395,21 @@ def main() -> None:
             devices=1,
         )
 
-    sasrec_kwargs: tp.Dict[str, tp.Any] = dict(
-        n_factors=N_FACTORS,
-        n_blocks=N_BLOCKS,
-        n_heads=N_HEADS,
-        session_max_len=SESSION_MAX_LEN,
-        dropout_rate=0.1,
-        loss="softmax",
-        lr=LR,
-        batch_size=BATCH_SIZE,
-        epochs=EPOCHS,
-        train_min_user_interactions=MIN_USER_INTERACTIONS,
-        dataloader_num_workers=0,
-        verbose=1,
-        get_trainer_func=sasrec_trainer,
-    )
+    sasrec_kwargs: tp.Dict[str, tp.Any] = {
+        "n_factors": N_FACTORS,
+        "n_blocks": N_BLOCKS,
+        "n_heads": N_HEADS,
+        "session_max_len": SESSION_MAX_LEN,
+        "dropout_rate": 0.1,
+        "loss": "softmax",
+        "lr": LR,
+        "batch_size": BATCH_SIZE,
+        "epochs": EPOCHS,
+        "train_min_user_interactions": MIN_USER_INTERACTIONS,
+        "dataloader_num_workers": 0,
+        "verbose": 1,
+        "get_trainer_func": sasrec_trainer,
+    }
     if PATIENCE is not None:
 
         def sasrec_val_mask(interactions_df: pd.DataFrame, **kwargs: tp.Any) -> pd.Series:

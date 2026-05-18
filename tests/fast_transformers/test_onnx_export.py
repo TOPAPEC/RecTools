@@ -1,5 +1,7 @@
 """Tests for ONNX export of UniSRec network and UniSRecModel.export_to_onnx."""
 
+# pylint: disable=redefined-outer-name,protected-access,import-outside-toplevel
+
 import typing as tp
 from pathlib import Path
 
@@ -10,8 +12,8 @@ import torch
 onnx = pytest.importorskip("onnx")
 ort = pytest.importorskip("onnxruntime")
 
-from rectools.fast_transformers.unisrec.model import UniSRecModel  # noqa: E402
-from rectools.fast_transformers.unisrec.net import UniSRec  # noqa: E402
+from rectools.fast_transformers.unisrec.model import UniSRecModel  # noqa: E402  # pylint: disable=wrong-import-position
+from rectools.fast_transformers.unisrec.net import UniSRec  # noqa: E402  # pylint: disable=wrong-import-position
 
 
 @pytest.fixture()

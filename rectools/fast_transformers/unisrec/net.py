@@ -67,7 +67,7 @@ def make_ffn(n_factors: int, ffn_type: str, expansion: int, dropout: float) -> n
     raise ValueError(f"Unknown ffn_type: {ffn_type}. Choose from: conv1d, linear_gelu, linear_relu")
 
 
-class UniSRec(nn.Module):
+class UniSRec(nn.Module):  # pylint: disable=too-many-instance-attributes
     """
     UniSRec: sequential recommender with pretrained text embeddings + adaptor.
 
@@ -190,7 +190,7 @@ class UniSRec(nn.Module):
     @staticmethod
     def _pca_init(embeddings: torch.Tensor, out_dim: int) -> torch.Tensor:
         centered = embeddings - embeddings.mean(dim=0)
-        _, _, Vh = torch.linalg.svd(centered, full_matrices=False)
+        _, _, Vh = torch.linalg.svd(centered, full_matrices=False)  # pylint: disable=not-callable
         out_dim = min(out_dim, Vh.shape[0])
         return Vh[:out_dim].T.contiguous()
 
@@ -248,7 +248,7 @@ class UniSRec(nn.Module):
         return torch.triu(torch.ones(seq_len, seq_len, device=device, dtype=torch.bool), diagonal=1)
 
     def _encode(self, seqs: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
-        B, L = input_ids.shape
+        _B, L = input_ids.shape
         positions = torch.arange(L, device=input_ids.device).unsqueeze(0)
         seqs = seqs + self.pos_emb(positions)
         seqs = self.emb_dropout(seqs)
