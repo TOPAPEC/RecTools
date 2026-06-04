@@ -28,6 +28,7 @@ class SASRecBlock(nn.Module):
         attn_mask: tp.Optional[torch.Tensor] = None,
         key_padding_mask: tp.Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        """Apply pre-norm attention and FFN with residual connections."""
         h = self.ln1(x)
         h, _ = self.mha(h, h, h, attn_mask=attn_mask, key_padding_mask=key_padding_mask, need_weights=False)
         x = x + h
@@ -36,9 +37,9 @@ class SASRecBlock(nn.Module):
         return x
 
 
-class FlatSASRec(nn.Module):
+class FlatSASRecNet(nn.Module):
     """
-    Flat SASRec: sequential recommender with plain id-embedding table
+    Flat SASRec network: sequential recommender with plain id-embedding table
     (no ItemNet hierarchy).
 
     Parameters

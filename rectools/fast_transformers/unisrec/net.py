@@ -27,6 +27,7 @@ class FeedForwardConv1d(nn.Module):
         self.dropout2 = nn.Dropout(p=dropout_rate)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Apply two Conv1d layers with ReLU and dropout."""
         outputs = self.conv1(inputs.transpose(-1, -2))
         outputs = self.relu(self.dropout1(outputs))
         outputs = self.conv2(outputs)
@@ -67,9 +68,9 @@ def make_ffn(n_factors: int, ffn_type: str, expansion: int, dropout: float) -> n
     raise ValueError(f"Unknown ffn_type: {ffn_type}. Choose from: conv1d, linear_gelu, linear_relu")
 
 
-class UniSRec(nn.Module):  # pylint: disable=too-many-instance-attributes
+class UniSRecNet(nn.Module):  # pylint: disable=too-many-instance-attributes
     """
-    UniSRec: sequential recommender with pretrained text embeddings + adaptor.
+    UniSRec network: sequential recommender with pretrained text embeddings + adaptor.
 
     Architecture::
 
@@ -238,7 +239,10 @@ class UniSRec(nn.Module):  # pylint: disable=too-many-instance-attributes
     def project_all(self) -> torch.Tensor:
         """Project all frozen embeddings (variant 0) through the score adaptor.
 
-        Returns shape ``(n_items + 1, n_factors)``.
+        Returns
+        -------
+        Tensor (n_items + 1, n_factors)
+            Adapted embeddings for every item including padding at index 0.
         """
         return self._adapt_score(self.frozen_emb[:, 0])
 
@@ -298,6 +302,18 @@ class UniSRec(nn.Module):  # pylint: disable=too-many-instance-attributes
         return self._encode(seqs, input_ids)
 
     def encode_last(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Encode and return the last-position representation (B, D)."""
+        """Encode and return the last-position representation.
+
+        Parameters
+        ----------
+        input_ids : LongTensor (B, L)
+            Left-padded item ID sequences (0 = padding).
+
+        Returns
+        -------
+        Tensor (B, n_factors)
+            Representation of the last (rightmost) position for each
+            sequence in the batch.
+        """
         h = self.forward(input_ids)  # (B, L, D)
         return h[:, -1, :]  # left-padded → last position is always the rightmost

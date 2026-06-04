@@ -1,6 +1,8 @@
 """UniSRecModel: standalone sequential recommender with pretrained text embeddings."""
 
+import logging
 import typing as tp
+import warnings
 from pathlib import Path
 
 import pytorch_lightning as pl
@@ -10,7 +12,24 @@ from torch.utils.data import DataLoader
 
 from ..preprocessing import SequenceBatchDataset, align_embeddings, build_sequences
 from .lightning import SUPPORTED_LOSSES, SUPPORTED_OPTIMIZERS, SUPPORTED_SCHEDULERS, UniSRecLightning
-from .net import UniSRec
+from .net import UniSRecNet
+
+logger = logging.getLogger(__name__)
+
+# Keys saved in checkpoint for architecture validation
+_ARCH_KEYS = (
+    "n_factors",
+    "projection_hidden",
+    "n_blocks",
+    "n_heads",
+    "session_max_len",
+    "dropout",
+    "adaptor_dropout",
+    "adaptor_type",
+    "use_adaptor_ffn",
+    "ffn_type",
+    "ffn_expansion",
+)
 
 
 class _NegativeSampler:
@@ -32,7 +51,7 @@ class _NegativeSampler:
 
 
 class _ProjectAllWrapper(torch.nn.Module):
-    def __init__(self, net: UniSRec) -> None:
+    def __init__(self, net: UniSRecNet) -> None:
         super().__init__()
         self.net = net
 
@@ -41,8 +60,7 @@ class _ProjectAllWrapper(torch.nn.Module):
 
 
 class UniSRecModel:  # pylint: disable=too-many-instance-attributes
-    """
-    UniSRec sequential recommender with pretrained text embeddings.
+    """UniSRec sequential recommender with pretrained text embeddings.
 
     Joint training of the adaptor and transformer encoder on
     frozen pretrained embeddings (e.g. from a sentence-transformer).
@@ -54,6 +72,13 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         ``(max_external_item_id + 1, n_variants, D_text)``.
         Index *i* holds the text embedding for the item whose **external** ID
         equals *i*.  Index 0 is padding (zeros).
+    patience : int, optional
+        Number of epochs with no improvement on validation loss before
+        stopping training.  **Note:** validation is currently computed on
+        the training data (last-item prediction on the same sequences),
+        so ``patience`` monitors training stability rather than true
+        generalization.  Pass an explicit held-out split via a future API
+        to get real early stopping.
     """
 
     def __init__(  # pylint: disable=too-many-arguments,too-many-locals
@@ -140,14 +165,19 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         self.device = device
         self.verbose = verbose
 
-        self._net: tp.Optional[UniSRec] = None
+        self._net: tp.Optional[UniSRecNet] = None
         self._unique_items: tp.Optional[torch.Tensor] = None
         self._unique_users: tp.Optional[torch.Tensor] = None
         self.is_fitted: bool = False
 
     # ── helpers ──
 
+    def _arch_kwargs(self) -> tp.Dict[str, tp.Any]:
+        """Return architecture hyperparameters as a dict."""
+        return {k: getattr(self, k) for k in _ARCH_KEYS}
+
     def _make_trainer(self, max_epochs: int, val_dl: tp.Any = None) -> pl.Trainer:
+        """Create a PyTorch Lightning Trainer."""
         callbacks = []
         if self.patience is not None and val_dl is not None:
             callbacks.append(EarlyStopping(monitor="val_loss", patience=self.patience, mode="min"))
@@ -164,11 +194,12 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
 
     def _make_lightning(
         self,
-        net: UniSRec,
+        net: UniSRecNet,
         param_groups: tp.List[tp.Dict],
         max_epochs: int,
         train_dl: tp.Any,
     ) -> UniSRecLightning:
+        """Build the Lightning wrapper for training."""
         total_steps = len(train_dl) * max_epochs if self.scheduler else None
         return UniSRecLightning(
             net=net,
@@ -185,7 +216,8 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
 
     # ── param groups ──
 
-    def _param_groups(self, net: UniSRec) -> tp.List[tp.Dict[str, tp.Any]]:
+    def _param_groups(self, net: UniSRecNet) -> tp.List[tp.Dict[str, tp.Any]]:
+        """Build per-layer parameter groups with individual learning rates."""
         if self.adaptor_type == "pca":
             adaptor: tp.List[tp.Dict[str, tp.Any]] = [
                 {"params": [net.whitening_proj], "lr": self.lr * self.lr_wp, "weight_decay": 0.0},
@@ -235,8 +267,7 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         item_ids: torch.Tensor,
         timestamps: torch.Tensor,
     ) -> "UniSRecModel":
-        """
-        Train the model on interaction data.
+        """Train the model on interaction data.
 
         Parameters
         ----------
@@ -251,6 +282,16 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         -------
         self
         """
+        if self.patience is not None:
+            warnings.warn(
+                "Early stopping currently monitors loss on the training data "
+                "(last-item prediction on the same sequences), not on a "
+                "held-out validation set. `patience` therefore tracks training "
+                "stability rather than true generalization.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         x, y, unique_items, unique_users = build_sequences(
             user_ids,
             item_ids,
@@ -269,7 +310,7 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
 
         aligned_emb = align_embeddings(self.pretrained_item_embeddings, unique_items, n_items)
 
-        net = UniSRec(
+        net = UniSRecNet(
             n_items=n_items,
             pretrained_embeddings=aligned_emb,
             n_factors=self.n_factors,
@@ -322,6 +363,13 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
     # ── save / load ──
 
     def save_checkpoint(self, path: tp.Union[str, Path]) -> None:
+        """Save model weights, ID mappings, and architecture hyperparameters.
+
+        Parameters
+        ----------
+        path : str or Path
+            Destination file path.
+        """
         assert self._net is not None and self._unique_items is not None
         torch.save(
             {
@@ -329,22 +377,51 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
                 "unique_items": self._unique_items,
                 "unique_users": self._unique_users,
                 "n_items": len(self._unique_items),
+                "arch": self._arch_kwargs(),
             },
             path,
         )
 
     def load_checkpoint(self, path: tp.Union[str, Path], device: tp.Optional[str] = None) -> None:
+        """Load model weights from a checkpoint.
+
+        Parameters
+        ----------
+        path : str or Path
+            Checkpoint file path (created by :meth:`save_checkpoint`).
+        device : str, optional
+            Device to load the model onto.  Defaults to CUDA if available.
+
+        Raises
+        ------
+        ValueError
+            If the checkpoint was saved with different architecture
+            hyperparameters than this model instance.
+        """
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-        ckpt = torch.load(path, map_location=device, weights_only=False)  # nosec B614
+        ckpt = torch.load(path, map_location=device, weights_only=True)
         self._unique_items = ckpt["unique_items"].cpu()
         self._unique_users = ckpt["unique_users"].cpu()
         n_items = ckpt["n_items"]
 
+        # Validate architecture hyperparameters if present
+        saved_arch = ckpt.get("arch")
+        if saved_arch is not None:
+            current_arch = self._arch_kwargs()
+            mismatches = {
+                k: (saved_arch[k], current_arch[k])
+                for k in _ARCH_KEYS
+                if k in saved_arch and saved_arch[k] != current_arch[k]
+            }
+            if mismatches:
+                msg = "; ".join(f"{k}: saved={sv}, current={cv}" for k, (sv, cv) in mismatches.items())
+                raise ValueError(f"Architecture mismatch between checkpoint and model: {msg}")
+
         assert self._unique_items is not None
         aligned_emb = align_embeddings(self.pretrained_item_embeddings, self._unique_items, n_items)
 
-        self._net = UniSRec(
+        self._net = UniSRecNet(
             n_items=n_items,
             pretrained_embeddings=aligned_emb,
             n_factors=self.n_factors,
@@ -375,11 +452,11 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
 
         Parameters
         ----------
-        encoder_path
+        encoder_path : str or Path
             Path for the encoder graph (input_ids -> hidden states).
-        items_path
+        items_path : str or Path, optional
             If given, also exports project_all (-> item embeddings).
-        opset_version
+        opset_version : int
             ONNX opset version (default 18).
         """
         assert self._net is not None, "Model not fitted or loaded"
@@ -387,32 +464,34 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         was_training = net.training
         net.eval()
 
-        device = next(net.parameters()).device
-        dummy = torch.zeros(1, 5, dtype=torch.long, device=device)
+        try:
+            device = next(net.parameters()).device
+            dummy = torch.zeros(1, 5, dtype=torch.long, device=device)
 
-        torch.onnx.export(
-            net,
-            (dummy,),
-            str(encoder_path),
-            input_names=["input_ids"],
-            output_names=["hidden"],
-            opset_version=opset_version,
-        )
-
-        if items_path is not None:
-            wrapper = _ProjectAllWrapper(net)
-            wrapper.eval()
             torch.onnx.export(
-                wrapper,
-                (),
-                str(items_path),
-                input_names=[],
-                output_names=["item_embs"],
+                net,
+                (dummy,),
+                str(encoder_path),
+                input_names=["input_ids"],
+                output_names=["hidden"],
+                dynamic_axes={"input_ids": {0: "batch", 1: "seq"}, "hidden": {0: "batch", 1: "seq"}},
                 opset_version=opset_version,
             )
 
-        if was_training:
-            net.train()
+            if items_path is not None:
+                wrapper = _ProjectAllWrapper(net)
+                wrapper.eval()
+                torch.onnx.export(
+                    wrapper,
+                    (),
+                    str(items_path),
+                    input_names=[],
+                    output_names=["item_embs"],
+                    opset_version=opset_version,
+                )
+        finally:
+            if was_training:
+                net.train()
 
     def map_item_ids(self, external_ids: torch.Tensor) -> torch.Tensor:
         """Map external item IDs to internal IDs used by the model.
@@ -438,7 +517,15 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         result[found] = sort_idx[pos[found]] + 1
         return result.to(input_device)
 
-    def recommend(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+    def _internal_to_external(self, internal_ids: torch.Tensor) -> torch.Tensor:
+        """Map internal item IDs (1-based) back to external IDs."""
+        assert self._unique_items is not None, "Model not fitted or loaded"
+        # internal_ids are 1-based; index 0 maps to 0 (unknown)
+        mapping = torch.zeros(len(self._unique_items) + 1, dtype=torch.long)
+        mapping[1:] = self._unique_items
+        return mapping[internal_ids.cpu()].to(internal_ids.device)
+
+    def recommend(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:  # noqa: D102
         """Not supported. Use :meth:`predict_topk` instead.
 
         ``UniSRecModel`` operates on raw tensor sequences, not on
@@ -464,13 +551,6 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         sequence encoding and dot-product ranking into one call, keeping
         everything on GPU without intermediate numpy / scipy conversions.
 
-        Compared to the ``TorchRanker.rank()`` path used by RecTools models:
-
-        * Item embeddings (``project_all()``) are computed once and stay on
-          device, instead of being transferred to GPU on every batch.
-        * There is no encode → cpu → numpy → cuda → score → cpu → numpy
-          roundtrip — the encoder output feeds directly into scoring.
-
         Parameters
         ----------
         input_ids : LongTensor (B, L)
@@ -484,27 +564,32 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         scores : Tensor (B, k)
             Dot-product scores, descending.
         item_ids : LongTensor (B, k)
-            Internal item IDs (1-based).
+            **External** item IDs corresponding to the top-k scores.
         """
         assert self._net is not None, "Model not fitted or loaded"
         net = self._net
         was_training = net.training
         net.eval()
-        device = next(net.parameters()).device
-        h = net.encode_last(input_ids.to(device))
-        item_embs = net.project_all()
-        scores = h @ item_embs.T
-        scores[:, 0] = float("-inf")
-        top_scores, top_ids = scores.topk(k, dim=1)
-        if was_training:
-            net.train()
+        try:
+            device = next(net.parameters()).device
+            h = net.encode_last(input_ids.to(device))
+            item_embs = net.project_all()
+            scores = h @ item_embs.T
+            scores[:, 0] = float("-inf")
+            top_scores, top_ids = scores.topk(k, dim=1)
+            top_ids = self._internal_to_external(top_ids)
+        finally:
+            if was_training:
+                net.train()
         return top_scores, top_ids
 
     @property
-    def net(self) -> UniSRec:
+    def net(self) -> UniSRecNet:
+        """Return the underlying network. Raises if model is not fitted."""
         assert self._net is not None, "Model not fitted or loaded"
         return self._net
 
     @property
     def item_id_mapping(self) -> tp.Optional[torch.Tensor]:
+        """Return the external item ID mapping tensor, or None if not fitted."""
         return self._unique_items

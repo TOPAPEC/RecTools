@@ -115,19 +115,22 @@ class TestLosses:
     def test_bce_loss_with_patience(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(loss="BCE", n_negatives=3, patience=2, epochs=3)
-        model.fit(user_ids, item_ids, timestamps)
+        with pytest.warns(UserWarning, match="Early stopping"):
+            model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
     def test_gbce_loss_with_patience(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(loss="gBCE", n_negatives=3, patience=2, epochs=3)
-        model.fit(user_ids, item_ids, timestamps)
+        with pytest.warns(UserWarning, match="Early stopping"):
+            model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
     def test_sampled_softmax_loss_with_patience(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(loss="sampled_softmax", n_negatives=3, patience=2, epochs=3)
-        model.fit(user_ids, item_ids, timestamps)
+        with pytest.warns(UserWarning, match="Early stopping"):
+            model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
 
     def test_invalid_loss_raises(self) -> None:
@@ -196,6 +199,31 @@ class TestCheckpoint:
         assert mapping2 is not None
         assert torch.equal(mapping1, mapping2)
 
+    def test_checkpoint_contains_arch_key(self, tmp_path: tp.Any) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+
+        ckpt_path = tmp_path / "model.pt"
+        model.save_checkpoint(ckpt_path)
+
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        assert "arch" in ckpt
+        assert "n_factors" in ckpt["arch"]
+        assert ckpt["arch"]["n_factors"] == 16
+
+    def test_load_mismatched_arch_raises(self, tmp_path: tp.Any) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(epochs=1, n_factors=16)
+        model.fit(user_ids, item_ids, timestamps)
+
+        ckpt_path = tmp_path / "model.pt"
+        model.save_checkpoint(ckpt_path)
+
+        model2 = _make_model(epochs=1, n_factors=32)
+        with pytest.raises(ValueError, match="Architecture mismatch"):
+            model2.load_checkpoint(ckpt_path, device="cpu")
+
 
 class TestFFNTypes:
     @pytest.mark.parametrize("ffn_type", ["conv1d", "linear_gelu", "linear_relu"])
@@ -210,8 +238,52 @@ class TestEarlyStopping:
     def test_patience(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
         model = _make_model(patience=2, epochs=5)
-        model.fit(user_ids, item_ids, timestamps)
+        with pytest.warns(UserWarning, match="Early stopping"):
+            model.fit(user_ids, item_ids, timestamps)
         assert model.is_fitted
+
+
+class TestPredictTopk:
+    def test_returns_external_ids(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+
+        mapping = model.item_id_mapping
+        assert mapping is not None
+        external_set = set(mapping.tolist())
+
+        # Build a dummy input sequence from known external IDs
+        known_external = mapping[:3]
+        internal = model.map_item_ids(known_external)
+        # Left-pad to session_max_len
+        padded = torch.zeros(1, 8, dtype=torch.long)
+        padded[0, -len(internal) :] = internal
+
+        scores, top_ids = model.predict_topk(padded, k=5)
+        assert scores.shape == (1, 5)
+        assert top_ids.shape == (1, 5)
+
+        # All returned IDs should be external (present in item_id_mapping)
+        for item_id in top_ids[0].tolist():
+            assert item_id in external_set, (
+                f"predict_topk returned internal ID {item_id}; expected external IDs"
+            )
+
+    def test_scores_are_descending(self) -> None:
+        user_ids, item_ids, timestamps = _make_interactions()
+        model = _make_model(epochs=1)
+        model.fit(user_ids, item_ids, timestamps)
+
+        mapping = model.item_id_mapping
+        assert mapping is not None
+        internal = model.map_item_ids(mapping[:3])
+        padded = torch.zeros(1, 8, dtype=torch.long)
+        padded[0, -len(internal) :] = internal
+
+        scores, _ = model.predict_topk(padded, k=5)
+        for i in range(scores.shape[1] - 1):
+            assert scores[0, i] >= scores[0, i + 1]
 
 
 class TestMapItemIds:

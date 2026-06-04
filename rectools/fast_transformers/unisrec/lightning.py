@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 
-from .net import UniSRec
+from .net import UniSRecNet
 
 SUPPORTED_LOSSES = ("softmax", "BCE", "gBCE", "sampled_softmax")
 SUPPORTED_OPTIMIZERS = ("adam", "adamw")
@@ -19,13 +19,13 @@ class UniSRecLightning(pl.LightningModule):
     """
     Thin Lightning wrapper for joint UniSRec training.
 
-    Wraps a :class:`UniSRec` network with configurable loss, optimizer,
+    Wraps a :class:`UniSRecNet` network with configurable loss, optimizer,
     and learning-rate scheduler.
     """
 
     def __init__(
         self,
-        net: UniSRec,
+        net: UniSRecNet,
         param_groups: tp.List[tp.Dict[str, tp.Any]],
         loss: str = "softmax",
         n_negatives: tp.Optional[int] = None,
@@ -104,6 +104,10 @@ class UniSRecLightning(pl.LightningModule):
         raise ValueError(f"Unknown loss: {self.loss_name}")
 
     def _full_softmax_loss(self, hidden: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        # NOTE: project_all() always uses variant 0 of frozen embeddings
+        # (deterministic), whereas BCE/gBCE/sampled_softmax score against
+        # _get_item_embs() which randomly samples variants during training.
+        # This means softmax never sees variant augmentation.
         all_emb = self._get_all_embs()
         logits = hidden @ all_emb.T
         logits[:, :, 0] = float("-inf")
@@ -117,7 +121,7 @@ class UniSRecLightning(pl.LightningModule):
         )
 
     def _sampled_softmax_loss(self, logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """Sampled softmax: positive at index 0, swap to index 1 so index 0 can be ignored."""
+        """Compute sampled softmax by swapping positive to index 1."""
         logits = logits.clone()
         logits[:, :, [0, 1]] = logits[:, :, [1, 0]]
         targets = mask.long()  # 1 where non-padding, 0 where padding
@@ -156,12 +160,14 @@ class UniSRecLightning(pl.LightningModule):
     # ── training / validation ──
 
     def training_step(self, batch: tp.Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """Run a single training step and log the loss."""
         hidden = self.net(batch["x"])
         loss = self._calc_loss(hidden, batch)
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch: tp.Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """Run a single validation step on the last sequence position."""
         hidden = self.net(batch["x"])
         # Validation batch has y of shape (B, 1) -- take last hidden position only
         hidden = hidden[:, -1:, :]
@@ -172,6 +178,7 @@ class UniSRecLightning(pl.LightningModule):
     # ── optimizer / scheduler ──
 
     def configure_optimizers(self) -> tp.Any:
+        """Build optimizer and optional LR scheduler."""
         opt: torch.optim.Optimizer
         if self.optimizer_name == "adamw":
             opt = torch.optim.AdamW(self._param_groups)

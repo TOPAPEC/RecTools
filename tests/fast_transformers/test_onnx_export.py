@@ -1,4 +1,4 @@
-"""Tests for ONNX export of UniSRec network and UniSRecModel.export_to_onnx."""
+"""Tests for ONNX export of UniSRecNet network and UniSRecModel.export_to_onnx."""
 
 # pylint: disable=redefined-outer-name,protected-access,import-outside-toplevel
 
@@ -13,15 +13,15 @@ onnx = pytest.importorskip("onnx")
 ort = pytest.importorskip("onnxruntime")
 
 from rectools.fast_transformers.unisrec.model import UniSRecModel  # noqa: E402  # pylint: disable=wrong-import-position
-from rectools.fast_transformers.unisrec.net import UniSRec  # noqa: E402  # pylint: disable=wrong-import-position
+from rectools.fast_transformers.unisrec.net import UniSRecNet  # noqa: E402  # pylint: disable=wrong-import-position
 
 
 @pytest.fixture()
-def net() -> UniSRec:
+def net() -> UniSRecNet:
     torch.manual_seed(0)
     pretrained = torch.randn(11, 32)
     pretrained[0] = 0.0
-    model = UniSRec(
+    model = UniSRecNet(
         n_items=10,
         pretrained_embeddings=pretrained,
         n_factors=16,
@@ -44,8 +44,8 @@ def _export_and_load(net: torch.nn.Module, args: tp.Any, tmp_path: Path, **kwarg
     return ort.InferenceSession(path)
 
 
-class TestUniSRecOnnxExport:
-    def test_export_succeeds(self, net: UniSRec, tmp_path: Path) -> None:
+class TestUniSRecNetOnnxExport:
+    def test_export_succeeds(self, net: UniSRecNet, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         path = str(tmp_path / "model.onnx")
         torch.onnx.export(
@@ -59,7 +59,7 @@ class TestUniSRecOnnxExport:
         model = onnx.load(path)
         onnx.checker.check_model(model)
 
-    def test_forward_roundtrip(self, net: UniSRec, tmp_path: Path) -> None:
+    def test_forward_roundtrip(self, net: UniSRecNet, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         sess = _export_and_load(
             net,
@@ -74,7 +74,7 @@ class TestUniSRecOnnxExport:
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
     @pytest.mark.xfail(reason="dynamic_shapes requires dynamo=True which is not used here")
-    def test_dynamic_batch(self, net: UniSRec, tmp_path: Path) -> None:
+    def test_dynamic_batch(self, net: UniSRecNet, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         batch = torch.export.Dim("batch", min=1)
         sess = _export_and_load(
@@ -96,7 +96,7 @@ class TestUniSRecOnnxExport:
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
     @pytest.mark.xfail(reason="dynamic_shapes requires dynamo=True which is not used here")
-    def test_different_sequence_lengths(self, net: UniSRec, tmp_path: Path) -> None:
+    def test_different_sequence_lengths(self, net: UniSRecNet, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         batch = torch.export.Dim("batch", min=1)
         seq_len = torch.export.Dim("seq_len", min=1, max=8)
@@ -115,7 +115,7 @@ class TestUniSRecOnnxExport:
         assert result.shape == (1, 3, 16)
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
-    def test_padding_only_input(self, net: UniSRec, tmp_path: Path) -> None:
+    def test_padding_only_input(self, net: UniSRecNet, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         sess = _export_and_load(
             net,
@@ -130,7 +130,7 @@ class TestUniSRecOnnxExport:
         result = sess.run(None, {"input_ids": all_pad.numpy()})[0]
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
-    def test_output_shape(self, net: UniSRec, tmp_path: Path) -> None:
+    def test_output_shape(self, net: UniSRecNet, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         sess = _export_and_load(
             net,
@@ -142,9 +142,9 @@ class TestUniSRecOnnxExport:
         result = sess.run(None, {"input_ids": dummy.numpy()})[0]
         assert result.shape == (1, 5, 16)
 
-    def test_project_all_roundtrip(self, net: UniSRec, tmp_path: Path) -> None:
+    def test_project_all_roundtrip(self, net: UniSRecNet, tmp_path: Path) -> None:
         class _ProjectAll(torch.nn.Module):
-            def __init__(self, inner: UniSRec):
+            def __init__(self, inner: UniSRecNet):
                 super().__init__()
                 self.inner = inner
 
@@ -193,7 +193,7 @@ class TestUniSRecModelExport:
 
         unique_items = torch.arange(1, 11)
         aligned = align_embeddings(pretrained, unique_items, 10)
-        net = UniSRec(
+        net = UniSRecNet(
             n_items=10,
             pretrained_embeddings=aligned,
             n_factors=16,

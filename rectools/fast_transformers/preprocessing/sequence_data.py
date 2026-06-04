@@ -4,10 +4,13 @@ All operations use pure PyTorch tensor ops, avoiding pandas/numpy overhead.
 On GPU this gives ~30x speedup over pandas-based preprocessing on ML-20M.
 """
 
+import logging
 import typing as tp
 
 import torch
 from torch.utils.data import Dataset as TorchDataset
+
+logger = logging.getLogger(__name__)
 
 
 def build_sequences(  # pylint: disable=too-many-locals
@@ -143,13 +146,23 @@ def align_embeddings(
         Aligned embeddings with padding row at index 0.
     """
     device = pretrained.device
+    dtype = pretrained.dtype
     idx = unique_items.long().to(device)
     valid = (idx >= 0) & (idx < pretrained.shape[0])
 
+    n_missing = int((~valid).sum().item())
+    if n_missing > 0:
+        logger.warning(
+            "align_embeddings: %d out of %d items have no pretrained embedding "
+            "(index out of range). They will be zero-filled (same as padding).",
+            n_missing,
+            len(idx),
+        )
+
     if pretrained.ndim == 2:
-        aligned = torch.zeros(n_items + 1, pretrained.shape[1], device=device)
+        aligned = torch.zeros(n_items + 1, pretrained.shape[1], dtype=dtype, device=device)
     else:
-        aligned = torch.zeros(n_items + 1, pretrained.shape[1], pretrained.shape[2], device=device)
+        aligned = torch.zeros(n_items + 1, pretrained.shape[1], pretrained.shape[2], dtype=dtype, device=device)
 
     aligned[1:][valid] = pretrained[idx[valid]]
     return aligned

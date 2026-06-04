@@ -2,10 +2,10 @@
 
 from .lightning import UniSRecLightning
 from .model import UniSRecModel
-from .net import FeedForward, UniSRec
+from .net import FeedForward, UniSRecNet
 
 __all__ = [
-    "UniSRec",
+    "UniSRecNet",
     "FeedForward",
     "UniSRecLightning",
     "UniSRecModel",

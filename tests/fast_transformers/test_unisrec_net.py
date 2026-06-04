@@ -1,11 +1,11 @@
-"""Tests for UniSRec network."""
+"""Tests for UniSRecNet network."""
 
 # pylint: disable=redefined-outer-name
 
 import pytest
 import torch
 
-from rectools.fast_transformers.unisrec.net import UniSRec
+from rectools.fast_transformers.unisrec.net import UniSRecNet
 
 
 @pytest.fixture()
@@ -18,8 +18,8 @@ def pretrained_emb() -> torch.Tensor:
 
 
 @pytest.fixture()
-def net(pretrained_emb: torch.Tensor) -> UniSRec:
-    return UniSRec(
+def net(pretrained_emb: torch.Tensor) -> UniSRecNet:
+    return UniSRecNet(
         n_items=30,
         pretrained_embeddings=pretrained_emb,
         n_factors=16,
@@ -32,25 +32,25 @@ def net(pretrained_emb: torch.Tensor) -> UniSRec:
     )
 
 
-class TestUniSRecShapes:
-    def test_forward_shape(self, net: UniSRec) -> None:
+class TestUniSRecNetShapes:
+    def test_forward_shape(self, net: UniSRecNet) -> None:
         x = torch.tensor([[0, 0, 1, 2, 3], [0, 4, 5, 6, 7]])
         h = net(x)
         assert h.shape == (2, 5, 16)
 
-    def test_encode_last_shape(self, net: UniSRec) -> None:
+    def test_encode_last_shape(self, net: UniSRecNet) -> None:
         x = torch.tensor([[0, 0, 1, 2, 3]])
         emb = net.encode_last(x)
         assert emb.shape == (1, 16)
 
-    def test_project_all_shape(self, net: UniSRec) -> None:
+    def test_project_all_shape(self, net: UniSRecNet) -> None:
         proj = net.project_all()
         assert proj.shape == (31, 16)  # n_items + 1 (with padding)
 
 
-class TestUniSRecAdaptor:
+class TestUniSRecNetAdaptor:
     def test_pca_no_ffn(self, pretrained_emb: torch.Tensor) -> None:
-        net = UniSRec(
+        net = UniSRecNet(
             n_items=30,
             pretrained_embeddings=pretrained_emb,
             n_factors=16,
@@ -68,7 +68,7 @@ class TestUniSRecAdaptor:
         torch.manual_seed(0)
         emb = torch.randn(31, 3, 64)  # 3 variants
         emb[0] = 0.0
-        net = UniSRec(
+        net = UniSRecNet(
             n_items=30,
             pretrained_embeddings=emb,
             n_factors=16,
@@ -84,7 +84,7 @@ class TestUniSRecAdaptor:
 
 
 class TestPaddingInvariance:
-    def test_determinism_and_padding_masking(self, net: UniSRec) -> None:
+    def test_determinism_and_padding_masking(self, net: UniSRecNet) -> None:
         """Same input produces identical output; padding positions are zeroed."""
         net.eval()
         x_a = torch.tensor([[0, 0, 0, 5, 10]])

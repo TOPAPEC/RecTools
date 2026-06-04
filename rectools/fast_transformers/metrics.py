@@ -70,7 +70,7 @@ def ndcg_at_k(
     k = topk_ids.shape[1]
     hits = (topk_ids == targets.unsqueeze(1)).float()  # (B, K)
     ranks = torch.arange(1, k + 1, device=topk_ids.device, dtype=torch.float)
-    discounts = 1.0 / torch.log(ranks + 1) * (1.0 / _log(log_base))
+    discounts = 1.0 / torch.log(ranks + 1) * (1.0 / math.log(log_base))
     dcg = (hits * discounts.unsqueeze(0)).sum(dim=1)  # (B,)
     idcg = discounts.sum()
     return (dcg / idcg).mean()
@@ -142,8 +142,3 @@ def compute_metrics(
         results[f"NDCG@{k}"] = ndcg_at_k(top, targets, log_base=log_base).item()
         results[f"MRR@{k}"] = mrr_at_k(top, targets).item()
     return results
-
-
-def _log(base: int) -> float:
-    """Natural log of base (cached constant)."""
-    return math.log(base)
