@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import requests  # type: ignore[import-untyped]
+import requests
 import torch
 from tqdm import tqdm
 

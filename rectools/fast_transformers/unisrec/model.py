@@ -185,7 +185,7 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
         return pl.Trainer(
             max_epochs=max_epochs,
             gradient_clip_val=self.grad_clip,
-            callbacks=callbacks or None,  # type: ignore[arg-type]
+            callbacks=callbacks or None,
             enable_checkpointing=False,
             enable_model_summary=False,
             logger=self.verbose > 0,
