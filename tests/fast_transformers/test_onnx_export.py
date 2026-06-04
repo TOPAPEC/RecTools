@@ -95,7 +95,6 @@ class TestUniSRecNetOnnxExport:
         assert result.shape[0] == 3
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
-    @pytest.mark.xfail(reason="dynamic_shapes requires dynamo=True which is not used here")
     def test_different_sequence_lengths(self, net: UniSRecNet, tmp_path: Path) -> None:
         dummy = torch.tensor([[0, 0, 1, 2, 3]], dtype=torch.long)
         batch = torch.export.Dim("batch", min=1)
