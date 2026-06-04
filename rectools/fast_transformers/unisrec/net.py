@@ -44,8 +44,19 @@ def make_ffn(n_factors: int, ffn_type: str, expansion: int, dropout: float) -> n
 
     Parameters
     ----------
+    n_factors : int
+        Input and output dimension.
     ffn_type : ``"conv1d"`` | ``"linear_gelu"`` | ``"linear_relu"``
-    expansion : hidden-dim multiplier (e.g. 1 or 4).
+        Type of feed-forward block.
+    expansion : int
+        Hidden-dimension multiplier (e.g. 1 or 4).
+    dropout : float
+        Dropout rate applied inside the block.
+
+    Returns
+    -------
+    nn.Module
+        A feed-forward network module.
     """
     if ffn_type == "conv1d":
         return FeedForwardConv1d(n_factors, dropout)

@@ -92,4 +92,7 @@ class TestPaddingInvariance:
         with torch.no_grad():
             e_a = net.encode_last(x_a)
             e_b = net.encode_last(x_b)
+            h_a = net(x_a)
         torch.testing.assert_close(e_a, e_b)
+        # Padding positions (first 3 columns) should be zeroed in full output
+        torch.testing.assert_close(h_a[:, :3, :], torch.zeros_like(h_a[:, :3, :]))

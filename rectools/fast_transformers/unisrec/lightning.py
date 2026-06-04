@@ -5,7 +5,7 @@ import typing as tp
 
 import pytorch_lightning as pl
 import torch
-import torch.nn.functional as F
+from torch.nn.functional import binary_cross_entropy_with_logits, cross_entropy
 from torch.optim.lr_scheduler import LambdaLR
 
 from .net import UniSRecNet
@@ -114,7 +114,7 @@ class UniSRecLightning(pl.LightningModule):
 
         targets = labels.clone()
         targets[targets == 0] = -100
-        return F.cross_entropy(
+        return cross_entropy(
             logits.view(-1, logits.size(-1)),
             targets.view(-1),
             ignore_index=-100,
@@ -125,7 +125,7 @@ class UniSRecLightning(pl.LightningModule):
         logits = logits.clone()
         logits[:, :, [0, 1]] = logits[:, :, [1, 0]]
         targets = mask.long()  # 1 where non-padding, 0 where padding
-        return F.cross_entropy(
+        return cross_entropy(
             logits.view(-1, logits.size(-1)),
             targets.view(-1),
             ignore_index=0,
@@ -134,7 +134,7 @@ class UniSRecLightning(pl.LightningModule):
     def _bce_loss(self, logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         target = torch.zeros_like(logits)
         target[:, :, 0] = 1.0
-        loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+        loss = binary_cross_entropy_with_logits(logits, target, reduction="none")
         loss = loss.mean(-1) * mask
         return loss.sum() / mask.sum().clamp(min=1)
 
