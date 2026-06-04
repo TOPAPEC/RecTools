@@ -266,9 +266,7 @@ class TestPredictTopk:
 
         # All returned IDs should be external (present in item_id_mapping)
         for item_id in top_ids[0].tolist():
-            assert item_id in external_set, (
-                f"predict_topk returned internal ID {item_id}; expected external IDs"
-            )
+            assert item_id in external_set, f"predict_topk returned internal ID {item_id}; expected external IDs"
 
     def test_scores_are_descending(self) -> None:
         user_ids, item_ids, timestamps = _make_interactions()
