@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
-from pytorch_lightning.callbacks import EarlyStopping
+from pytorch_lightning.callbacks import Callback, EarlyStopping
 from torch.utils.data import DataLoader
 
 from ..preprocessing import SequenceBatchDataset, align_embeddings, build_sequences
@@ -178,7 +178,7 @@ class UniSRecModel:  # pylint: disable=too-many-instance-attributes
 
     def _make_trainer(self, max_epochs: int, val_dl: tp.Any = None) -> pl.Trainer:
         """Create a PyTorch Lightning Trainer."""
-        callbacks = []
+        callbacks: tp.List[Callback] = []
         if self.patience is not None and val_dl is not None:
             callbacks.append(EarlyStopping(monitor="val_loss", patience=self.patience, mode="min"))
 
