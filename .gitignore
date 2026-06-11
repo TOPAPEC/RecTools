@@ -100,7 +100,3 @@ catboost_info/
 # Dev artifacts
 *.pt
 data/*
-
-# OpenCode
-opencode.json
-.opencode/
